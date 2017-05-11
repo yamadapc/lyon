@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::default::Default;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -7,14 +6,14 @@ use api::*;
 use buffer::*;
 use path::Path;
 use path_iterator::*;
-use glsl::PRIM_BUFFER_LEN;
 use renderer::{ GpuFillVertex, GpuStrokeVertex };
-use renderer::{ GpuFillPrimitive, GpuStrokePrimitive };
-use renderer::{ FillPrimitiveId, StrokePrimitiveId, WithId };
+use renderer::{ GpuFillPrimitive, /*GpuStrokePrimitive*/ };
+use renderer::{ FillPrimitiveId, WithId };
 use frame::{
     FillVertexBufferRange, IndexBufferRange,
     //StrokeVertexBufferRange,
 };
+use scene::ShapeStore;
 
 use core::math::*;
 use tessellation::basic_shapes;
@@ -46,18 +45,6 @@ impl<Vertex> GeometryStore<Vertex> {
         self.geom.vertices.clear();
         self.geom.indices.clear();
         self.ranges.clear();
-    }
-}
-
-pub struct ShapeStore {
-    paths: Vec<Arc<Path>>,
-}
-
-impl ShapeStore {
-    pub fn new() -> Self { Self { paths: Vec::new() } }
-
-    pub fn get_path(&self, id: PathId) -> &Arc<Path> {
-        &self.paths[id.index()]
     }
 }
 
@@ -208,15 +195,15 @@ impl<'l> PrimitiveBuilder<FillPrimitiveId, PrimitiveParams<FillStyle>> for FillP
     }
 
     fn build_primtive(&mut self, id: FillPrimitiveId, params: &PrimitiveParams<FillStyle>) {
-        let default_transform = TransformId { buffer: BufferId::new(0), element: Id::new(0) };
+        let default_transform = TransformId::new(0);
         self.primitives[id] = GpuFillPrimitive {
             color: match params.style.pattern {
                 Pattern::Color(color) => { color.f32_array() }
                 _ => { unimplemented!(); }
             },
             z_index: params.z_index as f32 / 10000.0,
-            local_transform: params.transforms.local.unwrap_or(default_transform).element.to_i32(),
-            view_transform: params.transforms.view.unwrap_or(default_transform).element.to_i32(),
+            local_transform: params.transforms.local.unwrap_or(default_transform).to_i32(),
+            view_transform: params.transforms.view.unwrap_or(default_transform).to_i32(),
             width: 0.0,
             .. Default::default()
         };
@@ -270,7 +257,7 @@ impl VertexBuilder<FillPrimitiveId, GpuFillVertex> for FillVertexBuilder {
         center: Point,
         radius: f32,
         prim_id: FillPrimitiveId,
-        tolerance: f32,
+        _tolerance: f32,
         geom: &mut Geometry<GpuFillVertex>
     ) -> GeometryRanges<GpuFillVertex> {
         let vtx_offset = geom.vertices.len();

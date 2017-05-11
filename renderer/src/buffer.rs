@@ -13,6 +13,7 @@ pub struct Id<T> {
 impl<T> Id<T> {
     pub fn new(handle: u16) -> Self { Id { handle: handle, _marker: PhantomData  } }
     pub fn index(&self) -> usize { self.handle as usize }
+    pub fn from_index(handle: usize) -> Self { Id::new(handle as u16) }
     pub fn to_i32(&self) -> i32 { self.handle as i32 }
     pub fn to_u16(&self) -> u16 { self.handle }
     pub fn as_range(&self) -> IdRange<T> { IdRange::new(self.handle..self.handle+1) }

@@ -1,6 +1,7 @@
 use renderer::{ GpuFillVertex, GpuStrokeVertex, GpuStrokePrimitive, GpuFillPrimitive, GpuTransform };
-use api::Color;
 use buffer::*;
+
+// TODO: remove all of this
 
 pub type Index = u16;
 pub type IndexBufferId = BufferId<Index>;
