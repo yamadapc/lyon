@@ -120,19 +120,13 @@ impl Color {
     }
 
     #[inline]
-    pub fn transparent_black() -> Self {
-        Color::black().with_alpha(0)
-    }
+    pub fn transparent_black() -> Self { Color::black().with_alpha(0) }
 
     #[inline]
-    pub fn is_opaque(&self) -> bool {
-        self.a == 255
-    }
+    pub fn is_opaque(&self) -> bool { self.a == 255 }
 
     #[inline]
-    pub fn array(self) -> [u8; 4] {
-        [self.r, self.g, self.b, self.a]
-    }
+    pub fn array(self) -> [u8; 4] { [self.r, self.g, self.b, self.a] }
 
     #[inline]
     pub fn f32_array(self) -> [f32; 4] {
@@ -196,9 +190,7 @@ impl LinearGradient {
         }
     }
 
-    pub fn stops(&self) -> &[GradientStop] {
-        &self.stops
-    }
+    pub fn stops(&self) -> &[GradientStop] { &self.stops }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -403,13 +395,9 @@ impl PaintOp {
 }
 
 impl SceneDescriptor {
-    pub fn paint(&mut self, op: PaintOp) {
-        self.items.push(RenderItem::Paint(op));
-    }
+    pub fn paint(&mut self, op: PaintOp) { self.items.push(RenderItem::Paint(op)); }
 
-    pub fn paint_scene(&mut self, op: SceneInstance) {
-        self.items.push(RenderItem::Scene(op))
-    }
+    pub fn paint_scene(&mut self, op: SceneInstance) { self.items.push(RenderItem::Scene(op)) }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

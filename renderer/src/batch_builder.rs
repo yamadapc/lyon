@@ -6,20 +6,17 @@ use api::*;
 use buffer::*;
 use path::Path;
 use path_iterator::*;
-use renderer::{ GpuFillVertex, GpuStrokeVertex };
-use renderer::{ GpuFillPrimitive, /*GpuStrokePrimitive*/ };
-use renderer::{ FillPrimitiveId, WithId };
-use frame::{
-    FillVertexBufferRange, IndexBufferRange,
-    //StrokeVertexBufferRange,
-};
+use renderer::{GpuFillVertex, GpuStrokeVertex};
+use renderer::GpuFillPrimitive;
+use renderer::{FillPrimitiveId, WithId};
+use frame::{FillVertexBufferRange, IndexBufferRange};
 use scene::ShapeStore;
 
 use core::math::*;
 use tessellation::basic_shapes;
 use tessellation::path_fill::*;
 //use tessellation::path_stroke::*;
-use tessellation::geometry_builder::{ VertexBuffers, BuffersBuilder };
+use tessellation::geometry_builder::{VertexBuffers, BuffersBuilder};
 
 pub type Geometry<VertexType> = VertexBuffers<VertexType>;
 
@@ -37,9 +34,7 @@ impl<Vertex> GeometryStore<Vertex> {
         }
     }
 
-    pub fn get(&self, id: ShapeId) -> Option<&GeometryRanges<Vertex>> {
-        self.ranges.get(&id)
-    }
+    pub fn get(&self, id: ShapeId) -> Option<&GeometryRanges<Vertex>> { self.ranges.get(&id) }
 
     pub fn clear(&mut self) {
         self.geom.vertices.clear();
@@ -63,13 +58,12 @@ pub struct Transforms {
 }
 
 pub trait VertexBuilder<PrimitiveId, Vertex> {
-
     fn add_path(
         &mut self,
         path: &Path,
         prim_id: PrimitiveId,
         tolerance: f32,
-        geom: &mut Geometry<Vertex>
+        geom: &mut Geometry<Vertex>,
     ) -> GeometryRanges<Vertex>;
 
     fn add_circle(
@@ -78,7 +72,7 @@ pub trait VertexBuilder<PrimitiveId, Vertex> {
         radius: f32,
         prim_id: FillPrimitiveId,
         tolerance: f32,
-        geom: &mut Geometry<Vertex>
+        geom: &mut Geometry<Vertex>,
     ) -> GeometryRanges<Vertex>;
 }
 
@@ -106,7 +100,7 @@ impl<PrimitiveId: Copy, Params> OpaqueBatcher<PrimitiveId, Params> {
         }
     }
 
-    pub fn push_item(&mut self, params: PrimitiveParams<Params>){
+    pub fn push_item(&mut self, params: PrimitiveParams<Params>) {
         self.render_nodes.push(params);
         self.allocated_primitives.push(None);
     }
@@ -125,7 +119,7 @@ impl<PrimitiveId: Copy, Params> OpaqueBatcher<PrimitiveId, Params> {
     ) -> Vec<Cmd<Vertex>>
     where
         VtxBuilder: VertexBuilder<PrimitiveId, Vertex>,
-        PrimBuilder: PrimitiveBuilder<PrimitiveId, PrimitiveParams<Params>>
+        PrimBuilder: PrimitiveBuilder<PrimitiveId, PrimitiveParams<Params>>,
     {
         // This is a gross overestimate if commands get merged through batching or instancing.
         let mut cmds = Vec::with_capacity(self.render_nodes.len());
@@ -137,7 +131,7 @@ impl<PrimitiveId: Copy, Params> OpaqueBatcher<PrimitiveId, Params> {
             let node = &mut self.render_nodes[index];
             let allocated_primitive = &mut self.allocated_primitives[index];
 
-            let prim_id = allocated_primitive.unwrap_or_else(&mut||{
+            let prim_id = allocated_primitive.unwrap_or_else(&mut || {
                 let prim_id = prim_builder.alloc_id();
                 *allocated_primitive = Some(prim_id);
                 prim_id
@@ -147,9 +141,7 @@ impl<PrimitiveId: Copy, Params> OpaqueBatcher<PrimitiveId, Params> {
 
             let draw_cmd = Cmd {
                 geometry: match geom_store.ranges.entry(node.shape) {
-                    Entry::Occupied(entry) => {
-                        *entry.get()
-                    }
+                    Entry::Occupied(entry) => *entry.get(),
                     Entry::Vacant(entry) => {
                         match node.shape {
                             ShapeId::Path(path_id) => {
@@ -165,9 +157,11 @@ impl<PrimitiveId: Copy, Params> OpaqueBatcher<PrimitiveId, Params> {
 
                                 geom
                             }
-                            _ => { unimplemented!(); }
+                            _ => {
+                                unimplemented!();
+                            }
                         }
-                    },
+                    }
                 },
                 instances: 1,
             };
@@ -189,23 +183,25 @@ pub struct FillPrimitiveBuilder<'l> {
     pub primitives: &'l mut CpuBuffer<GpuFillPrimitive>,
 }
 
-impl<'l> PrimitiveBuilder<FillPrimitiveId, PrimitiveParams<FillStyle>> for FillPrimitiveBuilder<'l> {
-    fn alloc_id(&mut self) -> FillPrimitiveId {
-        self.primitives.alloc()
-    }
+impl<'l> PrimitiveBuilder<FillPrimitiveId, PrimitiveParams<FillStyle>>
+    for
+    FillPrimitiveBuilder<'l> {
+    fn alloc_id(&mut self) -> FillPrimitiveId { self.primitives.alloc() }
 
     fn build_primtive(&mut self, id: FillPrimitiveId, params: &PrimitiveParams<FillStyle>) {
         let default_transform = TransformId::new(0);
         self.primitives[id] = GpuFillPrimitive {
             color: match params.style.pattern {
-                Pattern::Color(color) => { color.f32_array() }
-                _ => { unimplemented!(); }
+                Pattern::Color(color) => color.f32_array(),
+                _ => {
+                    unimplemented!();
+                }
             },
             z_index: params.z_index as f32 / 10000.0,
             local_transform: params.transforms.local.unwrap_or(default_transform).to_i32(),
             view_transform: params.transforms.view.unwrap_or(default_transform).to_i32(),
             width: 0.0,
-            .. Default::default()
+            ..Default::default()
         };
     }
 }
@@ -215,21 +211,16 @@ pub struct FillVertexBuilder {
 }
 
 impl FillVertexBuilder {
-    pub fn new() -> Self {
-        Self {
-            tessellator: FillTessellator::new(),
-        }
-    }
+    pub fn new() -> Self { Self { tessellator: FillTessellator::new() } }
 }
 
 impl VertexBuilder<FillPrimitiveId, GpuFillVertex> for FillVertexBuilder {
-
     fn add_path(
         &mut self,
         path: &Path,
         prim_id: FillPrimitiveId,
         tolerance: f32,
-        geom: &mut Geometry<GpuFillVertex>
+        geom: &mut Geometry<GpuFillVertex>,
     ) -> GeometryRanges<GpuFillVertex> {
         let vtx_offset = geom.vertices.len();
         let idx_offset = geom.indices.len();
@@ -237,7 +228,7 @@ impl VertexBuilder<FillPrimitiveId, GpuFillVertex> for FillVertexBuilder {
         let count = self.tessellator.tessellate_path(
             path.path_iter().flattened(tolerance),
             &FillOptions::default(),
-            &mut BuffersBuilder::new(geom, WithId(prim_id))
+            &mut BuffersBuilder::new(geom, WithId(prim_id)),
         ).unwrap();
 
         return FillGeometryRanges {
@@ -258,7 +249,7 @@ impl VertexBuilder<FillPrimitiveId, GpuFillVertex> for FillVertexBuilder {
         radius: f32,
         prim_id: FillPrimitiveId,
         _tolerance: f32,
-        geom: &mut Geometry<GpuFillVertex>
+        geom: &mut Geometry<GpuFillVertex>,
     ) -> GeometryRanges<GpuFillVertex> {
         let vtx_offset = geom.vertices.len();
         let idx_offset = geom.indices.len();
@@ -283,7 +274,9 @@ impl VertexBuilder<FillPrimitiveId, GpuFillVertex> for FillVertexBuilder {
 
 
 impl<T> Copy for GeometryRanges<T> {}
-impl<T> Clone for GeometryRanges<T> { fn clone(&self) -> Self { *self } }
+impl<T> Clone for GeometryRanges<T> {
+    fn clone(&self) -> Self { *self }
+}
 #[derive(Debug)]
 pub struct GeometryRanges<Vertex> {
     pub vertices: BufferRange<Vertex>,

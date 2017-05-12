@@ -1,4 +1,4 @@
-use renderer::{ GpuFillVertex, GpuStrokeVertex, GpuStrokePrimitive, GpuFillPrimitive, GpuTransform };
+use renderer::{GpuFillVertex, GpuStrokeVertex, GpuStrokePrimitive, GpuFillPrimitive, GpuTransform};
 use buffer::*;
 
 // TODO: remove all of this

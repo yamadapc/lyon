@@ -32,9 +32,7 @@ struct RenderSurface {
 }
 
 impl Api for Context {
-    fn add_path(&mut self, path: PathDescriptor) -> ShapeId {
-        self.shapes.add_path(path)
-    }
+    fn add_path(&mut self, path: PathDescriptor) -> ShapeId { self.shapes.add_path(path) }
 
     fn add_colors(&mut self, colors: &[Color], usage: Usage) -> ColorIdRange {
         self.buffers.add_colors(colors, usage)
@@ -228,16 +226,12 @@ pub struct ShapeStore {
 }
 
 impl ShapeStore {
-    pub fn new() -> Self {
-        Self { paths: Vec::new() }
-    }
+    pub fn new() -> Self { Self { paths: Vec::new() } }
 
     pub fn add_path(&mut self, descriptor: PathDescriptor) -> ShapeId {
         self.paths.push(descriptor);
         ShapeId::Path(PathId::from_index(self.paths.len() - 1))
     }
 
-    pub fn get_path(&self, id: PathId) -> &Arc<Path> {
-        &self.paths[id.index()].path
-    }
+    pub fn get_path(&self, id: PathId) -> &Arc<Path> { &self.paths[id.index()].path }
 }
