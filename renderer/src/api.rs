@@ -1,11 +1,11 @@
 use core::math::*;
 use path::Path;
 use buffer::*;
+use gpu_data::{GpuBlock4, GpuBlock8, GpuBlock16, GpuBlock32};
+use gpu_data::{GpuTransform2D, GpuRect};
 
 use std::sync::Arc;
 
-#[derive(Copy, Clone, Debug)]
-pub struct Transform;
 #[derive(Copy, Clone, Debug)]
 pub struct Mesh;
 #[derive(Copy, Clone, Debug)]
@@ -27,11 +27,17 @@ pub struct ApiRenderTarget;
 #[derive(Copy, Clone, Debug)]
 pub struct ApiRenderSurface;
 
+pub type Transform2dBlock = GpuBlock8;
+pub type Transform3dBlock = GpuBlock16;
+pub type RectBlock = GpuBlock4;
+
+pub type Transform = GpuTransform2D;
+
 pub type ImageId = Id<ApiImage>;
 pub type NodeId = Id<ApiNode>;
 pub type SceneId = Id<ApiScene>;
-pub type TransformId = Id<Transform>;
-pub type TransformIdRange = IdRange<Transform>;
+pub type TransformId = Id<Transform2dBlock>;
+pub type TransformIdRange = IdRange<Transform2dBlock>;
 pub type PathId = Id<Path>;
 pub type EllipseId = Id<Ellipse>;
 pub type MeshId = Id<Mesh>;
@@ -43,10 +49,12 @@ pub type NumberId = Id<f32>;
 pub type NumberIdRange = IdRange<f32>;
 pub type PointId = Id<Point>;
 pub type PointIdRange = IdRange<Point>;
-pub type RectId = Id<Rect>;
-pub type RectIdRange = IdRange<Rect>;
+pub type RectId = Id<RectBlock>;
+pub type RectIdRange = IdRange<RectBlock>;
 pub type RenderTargetId = Id<ApiRenderTarget>;
 pub type RenderSurfaceId = Id<ApiRenderSurface>;
+
+pub type TransformProperty = Property<Transform2dBlock>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PatternId {
@@ -229,7 +237,7 @@ pub trait Api {
 
     fn add_points(&mut self, values: &[Point], usage: Usage) -> PointIdRange;
 
-    fn add_rects(&mut self, values: &[Rect], usage: Usage) -> RectIdRange;
+    fn add_rects(&mut self, values: &[GpuRect], usage: Usage) -> RectIdRange;
 
     fn add_gradient_stops(&mut self, gradient: &[GradientStop], usage: Usage) -> GradientId;
 
@@ -250,7 +258,7 @@ pub trait Api {
 
     fn set_points(&mut self, range: PointIdRange, values: &[Point]);
 
-    fn set_rects(&mut self, range: RectIdRange, values: &[Rect]);
+    fn set_rects(&mut self, range: RectIdRange, values: &[GpuRect]);
 
     fn set_gradient_stops(&mut self, id: GradientId, gradient: &[GradientStop]);
 
@@ -342,8 +350,8 @@ pub struct PaintOp {
     pub ty: PaintType,
     pub shape: ShapeId,
     pub pattern: PatternId,
-    pub local_transform: Property<Transform>,
-    pub view_transform: Property<Transform>,
+    pub local_transform: TransformProperty,
+    pub view_transform: TransformProperty,
     pub width: Property<f32>,
     pub flags: u32,
 }
@@ -373,12 +381,12 @@ impl PaintOp {
         }
     }
 
-    pub fn with_local_transform(mut self, transform: Property<Transform>) -> Self {
+    pub fn with_local_transform(mut self, transform: TransformProperty) -> Self {
         self.local_transform = transform;
         return self;
     }
 
-    pub fn with_view_transform(mut self, transform: Property<Transform>) -> Self {
+    pub fn with_view_transform(mut self, transform: TransformProperty) -> Self {
         self.view_transform = transform;
         return self;
     }

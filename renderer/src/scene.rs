@@ -4,6 +4,9 @@ use renderer::{GpuFillVertex, GpuStrokeVertex};
 use path::Path;
 use tessellation::geometry_builder::VertexBuffers;
 use batch_builder::GeometryStore;
+use gpu_data::{GpuBlock4, GpuBlock8, GpuBlock16, GpuBlock32};
+use gpu_data::{GpuRect};
+use buffer::CpuBuffer;
 
 use std::sync::Arc;
 
@@ -50,7 +53,7 @@ impl Api for Context {
         self.buffers.add_points(values, usage)
     }
 
-    fn add_rects(&mut self, values: &[Rect], usage: Usage) -> RectIdRange {
+    fn add_rects(&mut self, values: &[GpuRect], usage: Usage) -> RectIdRange {
         self.buffers.add_rects(values, usage)
     }
 
@@ -96,7 +99,7 @@ impl Api for Context {
         self.buffers.set_points(range, values);
     }
 
-    fn set_rects(&mut self, range: RectIdRange, values: &[Rect]) {
+    fn set_rects(&mut self, range: RectIdRange, values: &[GpuRect]) {
         self.buffers.set_rects(range, values);
     }
 
@@ -137,21 +140,27 @@ impl Context {
 }
 
 pub struct Buffers {
-    rects: Vec<Rect>,
     points: Vec<Point>,
     colors: Vec<Color>,
     numbers: Vec<f32>,
-    transforms: Vec<Transform>,
+
+    data_4: CpuBuffer<GpuBlock4>,
+    data_8: CpuBuffer<GpuBlock8>,
+    data_16: CpuBuffer<GpuBlock16>,
+    data_32: CpuBuffer<GpuBlock32>,
 }
 
 impl Buffers {
     pub fn new() -> Self {
         Buffers {
-            rects: Vec::new(),
             points: Vec::new(),
             colors: Vec::new(),
             numbers: Vec::new(),
-            transforms: Vec::new(),
+
+            data_4: CpuBuffer::new(256),
+            data_8: CpuBuffer::new(256),
+            data_16: CpuBuffer::new(256),
+            data_32: CpuBuffer::new(256),
         }
     }
 
@@ -163,10 +172,7 @@ impl Buffers {
     }
 
     pub fn add_transforms(&mut self, transforms: &[Transform], _usage: Usage) -> TransformIdRange {
-        let first = self.transforms.len();
-        self.transforms.extend_from_slice(transforms);
-        let last = self.transforms.len();
-        TransformIdRange::from_indices(first..last)
+        self.data_8.push_range(transforms)
     }
 
     pub fn add_numbers(&mut self, values: &[f32], _usage: Usage) -> NumberIdRange {
@@ -183,11 +189,8 @@ impl Buffers {
         PointIdRange::from_indices(first..last)
     }
 
-    pub fn add_rects(&mut self, values: &[Rect], _usage: Usage) -> RectIdRange {
-        let first = self.rects.len();
-        self.rects.extend_from_slice(values);
-        let last = self.rects.len();
-        RectIdRange::from_indices(first..last)
+    pub fn add_rects(&mut self, values: &[GpuRect], _usage: Usage) -> RectIdRange {
+        self.data_4.push_range(values)
     }
 
     pub fn set_colors(&mut self, range: ColorIdRange, values: &[Color]) {
@@ -197,9 +200,7 @@ impl Buffers {
     }
 
     pub fn set_transforms(&mut self, range: TransformIdRange, values: &[Transform]) {
-        for i in range.usize_range() {
-            self.transforms[i] = values[i]
-        }
+        self.data_8.set_range(range, values);
     }
 
     pub fn set_numbers(&mut self, range: NumberIdRange, values: &[f32]) {
@@ -214,10 +215,8 @@ impl Buffers {
         }
     }
 
-    pub fn set_rects(&mut self, range: RectIdRange, values: &[Rect]) {
-        for i in range.usize_range() {
-            self.rects[i] = values[i]
-        }
+    pub fn set_rects(&mut self, range: RectIdRange, values: &[GpuRect]) {
+        self.data_4.set_range(range, values);
     }
 }
 

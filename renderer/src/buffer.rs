@@ -227,10 +227,18 @@ impl<T: Default + Copy> CpuBuffer<T> {
 
     pub fn alloc_back(&mut self) -> Id<T> { self.try_alloc_back().unwrap() }
 
-    pub fn push(&mut self, val: T) -> Id<T> {
+    pub fn push<U: Copy + Into<T>>(&mut self, val: U) -> Id<T> {
         let id = self.alloc();
-        self[id] = val;
+        self[id] = val.into();
         return id;
+    }
+
+    pub fn push_range<U: Copy + Into<T>>(&mut self, values: &[U]) -> IdRange<T> {
+        let id_range = self.alloc_range(values.len() as u16);
+        for i in 0..values.len() {
+            self[id_range.get(i as u16)] = values[i].into();
+        }
+        return id_range;
     }
 
     pub fn try_alloc_range(&mut self, count: u16) -> Option<IdRange<T>> {
@@ -253,15 +261,22 @@ impl<T: Default + Copy> CpuBuffer<T> {
         self.try_alloc_range_back(count).unwrap()
     }
 
-    pub fn push_back(&mut self, val: T) -> Id<T> {
+    pub fn push_back<U: Into<T>>(&mut self, val: U) -> Id<T> {
         let id = self.alloc_back();
-        self[id] = val;
+        self[id] = val.into();
         return id;
     }
 
     pub fn as_slice(&self) -> &[T] { &self.data[..] }
 
     pub fn as_mut_slice(&mut self) -> &mut [T] { &mut self.data[..] }
+
+    pub fn set_range<U: Copy + Into<T>>(&mut self, range: IdRange<T>, values: &[U]) {
+        debug_assert!(range.count() as usize == values.len());
+        for i in 0..range.count() {
+            self[range.get(i)] = values[i as usize].into();
+        }
+    }
 
     pub fn len(&self) -> usize { self.data.len() }
 
