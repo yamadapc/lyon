@@ -248,7 +248,7 @@ impl VertexBuilder<FillPrimitiveId, GpuFillVertex> for FillVertexBuilder {
         center: Point,
         radius: f32,
         prim_id: FillPrimitiveId,
-        _tolerance: f32,
+        tolerance: f32,
         geom: &mut Geometry<GpuFillVertex>,
     ) -> GeometryRanges<GpuFillVertex> {
         let vtx_offset = geom.vertices.len();
