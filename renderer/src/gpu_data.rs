@@ -1,4 +1,4 @@
-use core::math::{Transform2D, Mat4};
+use core::math::{Transform2D, Transform3D};
 use std::mem;
 
 #[repr(C)]
@@ -131,7 +131,7 @@ gpu_data! {
 
 gpu_data! {
     struct GpuTransform3D: GpuBlock16 {
-        matrix: Mat4,
+        matrix: Transform3D,
     }
 }
 

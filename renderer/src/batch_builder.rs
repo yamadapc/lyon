@@ -1,6 +1,7 @@
 use std::default::Default;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 use api::*;
 use buffer::*;
@@ -10,7 +11,7 @@ use renderer::{GpuFillVertex, GpuStrokeVertex};
 use renderer::GpuFillPrimitive;
 use renderer::{FillPrimitiveId, WithId};
 use frame::{FillVertexBufferRange, IndexBufferRange};
-use scene::ShapeStore;
+
 
 use core::math::*;
 use tessellation::basic_shapes;
@@ -300,4 +301,19 @@ fn simple_opaque_builder() {
         &mut FillVertexBuilder::new(),
         &mut FillPrimitiveBuilder { primitives: &mut primitives },
     );
+}
+
+pub struct ShapeStore {
+    paths: Vec<PathDescriptor>,
+}
+
+impl ShapeStore {
+    pub fn new() -> Self { Self { paths: Vec::new() } }
+
+    pub fn add_path(&mut self, descriptor: PathDescriptor) -> ShapeId {
+        self.paths.push(descriptor);
+        ShapeId::Path(PathId::from_index(self.paths.len() - 1))
+    }
+
+    pub fn get_path(&self, id: PathId) -> &Arc<Path> { &self.paths[id.index()].path }
 }

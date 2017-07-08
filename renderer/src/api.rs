@@ -1,7 +1,7 @@
 use core::math::*;
 use path::Path;
 use buffer::*;
-use gpu_data::{GpuBlock4, GpuBlock8, GpuBlock16, GpuBlock32};
+use gpu_data::{GpuBlock4, GpuBlock8, GpuBlock16};
 use gpu_data::{GpuTransform2D, GpuRect};
 
 use std::sync::Arc;

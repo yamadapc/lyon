@@ -16,7 +16,6 @@ extern crate lyon_path_iterator as path_iterator;
 extern crate lyon_tessellation as tessellation;
 
 pub mod api;
-pub mod scene;
 pub mod frame;
 pub mod batch_builder;
 pub mod buffer;
