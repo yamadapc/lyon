@@ -69,8 +69,75 @@ struct SpanTag;
 type ActiveEdgeId = Id<ActiveEdgeTag, usize>;
 type SpanId = Id<SpanTag, usize>;
 type EdgeBelowId = Id<EdgeBelowTag, usize>;
-type ActiveEdges = IdVec<ActiveEdgeId, ActiveEdge>;
 type EdgesBelow = IdVec<EdgeBelowId, EdgeBelow>;
+
+struct ActiveEdges {
+    points: IdVec<ActiveEdgeId, Edge>,
+    merge: IdVec<ActiveEdgeId, bool>,
+    upper_id: IdVec<ActiveEdgeId, VertexId>,
+}
+
+impl ActiveEdges {
+    fn new() -> Self {
+        ActiveEdges {
+            points: IdVec::with_capacity(16),
+            merge: IdVec::with_capacity(16),
+            upper_id: IdVec::with_capacity(16),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.points.clear();
+        self.merge.clear();
+        self.upper_id.clear();
+    }
+
+    #[inline]
+    fn has_id(&self, id: ActiveEdgeId) -> bool { self.points.has_id(id) }
+
+    #[inline]
+    fn len(&self) -> usize { self.points.len() }
+
+    fn insert(&mut self, id: ActiveEdgeId, p1: &Edge, p2: &Edge, vertex: VertexId) {
+        self.points.reserve(2);
+        self.merge.reserve(2);
+        self.upper_id.reserve(2);
+        self.points.insert(id, *p1);
+        self.points.insert(id+1, *p2);
+        self.merge.insert(id, false);
+        self.merge.insert(id, false);
+        self.upper_id.insert(id, vertex);
+        self.upper_id.insert(id, vertex);
+    }
+
+    fn set(&mut self, id: ActiveEdgeId, points: &Edge, vertex: VertexId, merge: bool) {
+        self.points[id] = *points;
+        self.upper_id[id] = vertex;
+        self.merge[id] = merge;
+    }
+
+    fn remove(&mut self, id: ActiveEdgeId) {
+        self.points.remove(id);
+        self.merge.remove(id);
+        self.upper_id.remove(id);
+    }
+
+    fn merge_vertex(&mut self, id: ActiveEdgeId, position: TessPoint, vertex: VertexId) {
+        debug_assert!(!even(id));
+        let next = id+1;
+        self.points[id].upper = position;
+        self.points[next].upper = position;
+        self.upper_id[id] = vertex;
+        self.upper_id[next] = vertex;
+        self.merge[id] = true;
+        self.merge[next] = true;
+    }
+
+    fn set_lower_vertex(&mut self, id: ActiveEdgeId, pos: TessPoint) {
+        self.points[id].lower = pos;
+        self.merge[id] = false;
+    }
+}
 
 /// The fill tessellator's result type.
 pub type FillResult = Result<Count, FillError>;
@@ -210,7 +277,7 @@ impl FillTessellator {
     pub fn new() -> FillTessellator {
         FillTessellator {
             events: FillEvents::new(),
-            active_edges: ActiveEdges::with_capacity(16),
+            active_edges: ActiveEdges::new(),
             monotone_tessellators: IdVec::with_capacity(16),
             below: Vec::with_capacity(8),
             intersections: Vec::with_capacity(8),
@@ -469,21 +536,21 @@ impl FillTessellator {
         // existing spans.
         let mut edge_idx = Id::new(0);
 
-        for active_edge in &mut self.active_edges {
+        for edge in &mut self.active_edges.points {
             let is_left = even(edge_idx);
 
-            if active_edge.merge {
+            if self.active_edges.merge[edge_idx] {
                 edge_idx = edge_idx + 1;
                 continue;
             }
 
-            if active_edge.points.lower == current_position {
+            if edge.lower == current_position {
                 status = if is_left { E::LeftEdge } else { E::RightEdge };
                 break;
             }
 
             let (touches, edge_passed_current) = compare_edge_against_position(
-                &active_edge.points,
+                &edge,
                 current_position
             );
 
@@ -494,10 +561,10 @@ impl FillTessellator {
 
                 // Split the edge.
                 self.below.push(EdgeBelow {
-                    lower: active_edge.points.lower,
-                    angle: edge_angle(active_edge.points.lower - current_position),
+                    lower: edge.lower,
+                    angle: edge_angle(edge.lower - current_position),
                 });
-                active_edge.points.lower = current_position;
+                edge.lower = current_position;
 
                 status = if is_left { E::LeftEdge } else { E::RightEdge };
                 break;
@@ -610,14 +677,16 @@ impl FillTessellator {
         // Count the number of remaining edges above the sweep line that end at
         // the current position.
         let mut above_count = 0;
-        for active_edge in self.active_edges.range_from(edge_idx).iter() {
-            if !active_edge.merge {
-                if active_edge.points.lower != current_position {
-                    break;
-                }
-
-                above_count += 1;
+        for (i, active_edge) in self.active_edges.points.range_from(edge_idx).iter().enumerate() {
+            if self.active_edges.merge[edge_idx + i] {
+                continue;
             }
+
+            if active_edge.lower != current_position {
+                break;
+            }
+
+            above_count += 1;
         }
 
         //println!("above count: {}", above_count);
@@ -726,18 +795,7 @@ impl FillTessellator {
                 self.check_intersections(&mut left_edge);
                 self.check_intersections(&mut right_edge);
 
-                self.active_edges.insert_slice(edge_idx, &[
-                    ActiveEdge {
-                        points: left_edge,
-                        upper_id: id,
-                        merge: false,
-                    },
-                    ActiveEdge {
-                        points: right_edge,
-                        upper_id: id,
-                        merge: false,
-                    },
-                ]);
+                self.active_edges.insert(edge_idx, &left_edge, &right_edge, id);
 
                 let vec2_position = to_f32_point(current_position);
                 self.monotone_tessellators.insert(
@@ -771,12 +829,12 @@ impl FillTessellator {
         // add support for other fill rules.
         debug_assert!(even(edge_idx));
 
-        while self.active_edges[edge_idx + 1].merge {
+        while self.active_edges.merge[edge_idx + 1] {
             //     \ /
             //  \   x   <-- merge vertex
             //   \ :
             //    x   <-- current vertex
-            self.active_edges[edge_idx + 2].set_lower_vertex(current);
+            self.active_edges.set_lower_vertex(edge_idx + 2, current);
             self.end_span(edge_idx, current, id, output);
         }
     }
@@ -792,10 +850,10 @@ impl FillTessellator {
     ) {
         debug_assert!(even(edge_idx));
         // Look whether the span shares a merge vertex with the previous one
-        if self.active_edges[edge_idx].merge {
+        if self.active_edges.merge[edge_idx] {
             let left_span_edge = edge_idx - 1;
             let right_span_edge = edge_idx;
-            debug_assert!(self.active_edges[left_span_edge].merge);
+            debug_assert!(self.active_edges.merge[left_span_edge]);
             //            \ /
             //             x   <-- merge vertex
             //  left_span  :  righ_span
@@ -809,40 +867,26 @@ impl FillTessellator {
             self.resolve_merge_vertices(edge_idx, current, id, output);
         } else {
             //      /
-            //     x
+            //     x  <-- left_id
             //    / :r2
             // ll/   x   <-- current split vertex
             //  left/ \right
-            let ll = self.active_edges[edge_idx];
+            let ll = self.active_edges.points[edge_idx];
+            let left_id = self.active_edges.upper_id[edge_idx];
             let r2 = Edge {
-                upper: ll.points.upper,
+                upper: ll.upper,
                 lower: current,
             };
 
-            // TODO this can be simplified, we are reinserting ll and the mutating the edge that was ll before.
-            self.active_edges.insert_slice(edge_idx, &[
-                ActiveEdge {
-                    points: ll.points,
-                    upper_id: ll.upper_id,
-                    merge: false,
-                },
-                ActiveEdge {
-                    points: r2,
-                    upper_id: ll.upper_id,
-                    merge: false,
-                },
-            ]);
+            // TODO this can be simplified, we are reinserting ll and then mutating the edge that was ll before.
+            self.active_edges.insert(edge_idx, &ll, &r2, left_id);
 
-            self.active_edges[edge_idx + 2] = ActiveEdge {
-                points: r2,
-                upper_id: id,
-                merge: false,
-            };
+            self.active_edges.set(edge_idx + 2, &r2, id, false);
 
-            let vec2_position = to_f32_point(ll.points.upper);
+            let vec2_position = to_f32_point(ll.upper);
             self.monotone_tessellators.insert(
                 span_for_edge(edge_idx),
-                MonotoneTessellator::begin(vec2_position, ll.upper_id)
+                MonotoneTessellator::begin(vec2_position, left_id)
             );
 
             self.insert_edge(edge_idx + 1, current, left.lower, id);
@@ -870,8 +914,7 @@ impl FillTessellator {
 
         let vec2_position = to_f32_point(position);
 
-        self.active_edges[left_span_edge].merge_vertex(position, id);
-        self.active_edges[right_span_edge].merge_vertex(position, id);
+        self.active_edges.merge_vertex(left_span_edge, position, id);
 
         self.monotone_tessellators[span_for_edge(left_span_edge)].vertex(vec2_position, id, Side::Right);
         self.monotone_tessellators[span_for_edge(right_span_edge)].vertex(vec2_position, id, Side::Left);
@@ -887,14 +930,16 @@ impl FillTessellator {
         debug_assert!(!is_after(upper, lower));
         // TODO horrible hack: set the merge flag on the edge we are about to replace temporarily
         // so that it doesn not get in the way of the intersection detection.
-        self.active_edges[edge_idx].merge = true;
+        self.active_edges.merge[edge_idx] = true;
         let mut edge = Edge {
             upper: upper,
             lower: lower,
         };
         self.check_intersections(&mut edge);
-        // This sets the merge flag to false.
-        self.active_edges[edge_idx] = ActiveEdge { points: edge, upper_id: id, merge: false };
+        self.active_edges.points[edge_idx] = edge;
+        self.active_edges.upper_id[edge_idx] = id;
+        // set the merge flag back to false.
+        self.active_edges.merge[edge_idx] = false;
 
         let side = if even(edge_idx) { Side::Left } else { Side::Right };
         let vec2_position = to_f32_point(upper);
@@ -924,29 +969,31 @@ impl FillTessellator {
         let original_edge = new_edge.clone();
         let mut intersection = None;
 
-        for (edge_idx, edge) in self.active_edges.iter_mut().enumerate() {
+        for (i, edge) in self.active_edges.points.iter().enumerate() {
+            let edge_idx = ActiveEdgeId::new(i);
             // Test for an intersection against the span's left edge.
-            if !edge.merge {
-                if let Some(position) = segment_intersection(&new_edge, &edge.points) {
-                    tess_log!(self, " -- found an intersection at {:?}
-                                    |    {:?}->{:?} x {:?}->{:?}",
-                        position,
-                        original_edge.upper, original_edge.lower,
-                        edge.points.upper, edge.points.lower,
-                    );
+            if self.active_edges.merge[edge_idx] {
+                continue;
+            }
+            if let Some(position) = segment_intersection(&new_edge, &edge) {
+                tess_log!(self, " -- found an intersection at {:?}
+                                |    {:?}->{:?} x {:?}->{:?}",
+                    position,
+                    original_edge.upper, original_edge.lower,
+                    edge.upper, edge.lower,
+                );
 
-                    intersection = Some((
-                        Intersection {
-                            point: position,
-                            lower1: original_edge.lower,
-                            lower2: edge.points.lower,
-                        },
-                        ActiveEdgeId::new(edge_idx),
-                    ));
-                    // From now on only consider potential intersections above the one we found,
-                    // by removing the lower part from the segment we test against.
-                    new_edge.lower = position;
-                }
+                intersection = Some((
+                    Intersection {
+                        point: position,
+                        lower1: original_edge.lower,
+                        lower2: edge.lower,
+                    },
+                    edge_idx,
+                ));
+                // From now on only consider potential intersections above the one we found,
+                // by removing the lower part from the segment we test against.
+                new_edge.lower = position;
             }
         }
 
@@ -972,10 +1019,10 @@ impl FillTessellator {
             " set edge[{:?}].poinst.lower = {:?} (was {:?})",
             edge_idx,
             intersection.point,
-            self.active_edges[edge_idx].points.lower
+            self.active_edges.points[edge_idx].lower
         );
 
-        self.active_edges[edge_idx].points.lower = intersection.point;
+        self.active_edges.points[edge_idx].lower = intersection.point;
         self.intersections.push(Edge::new(intersection.point, intersection.lower1));
         self.intersections.push(Edge::new(intersection.point, intersection.lower2));
 
@@ -1017,19 +1064,20 @@ impl FillTessellator {
 
     #[cfg(debug)]
     fn debug_check_sl(&self, current: TessPoint) {
-        for edge in &self.active_edges {
-            if !edge.merge {
+        for id in self.active_edges.ids() {
+            if !self.active_edges.merge[id] {
+                let edge = self.active_edges.points[id];
                 debug_assert!(
-                    !is_after(current, edge.points.lower),
+                    !is_after(current, edge.lower),
                     "current {:?} should not be below lower {:?}",
                     current,
-                    edge.points.lower
+                    edge.lower
                 );
                 debug_assert!(
-                    !is_after(edge.points.upper, edge.points.lower),
+                    !is_after(edge.upper, edge.lower),
                     "upper left {:?} should not be below lower {:?}",
-                    edge.points.upper,
-                    edge.points.lower
+                    edge.upper,
+                    edge.lower
                 );
             }
         }
@@ -1056,13 +1104,13 @@ impl FillTessellator {
     fn log_sl_ids(&self) {
         print!("\n|  sl: ");
         let mut left = true;
-        for edge in &self.active_edges {
-            let m = if edge.merge { "*" } else { " " };
+        for id in self.active_edges.ids() {
+            let m = if self.active_edges.merge[id] { "*" } else { " " };
             let sep = if left { " |" } else { " " };
             print!(
                 "{} {:?}{} ",
                 sep,
-                edge.upper_id.offset(), m,
+                self.active_edges.upper_id[id].offset(), m,
             );
             left = !left
         }
@@ -1076,21 +1124,21 @@ impl FillTessellator {
     fn log_sl_points(&self) {
         print!("\n sl: [");
         let mut left = true;
-        for edge in &self.active_edges {
+        for id in self.active_edges.ids() {
             let sep = if left { "|" } else { " " };
-            print!("{} {:?} ", sep, edge.points.upper);
+            print!("{} {:?} ", sep, self.active_edges.points[id].upper);
             left = !left;
         }
         println!("]");
         print!("     [");
         let mut left = true;
-        for edge in &self.active_edges {
+        for id in self.active_edges.ids() {
             let sep = if left { "|" } else { " " };
             print!("{}", sep);
-            if edge.merge {
+            if self.active_edges.merge[id] {
                 print!("   <merge>           ");
             } else {
-                print!("{:?} ", edge.points.lower);
+                print!("{:?} ", self.active_edges.points[id].lower);
             }
             left = !left;
         }
@@ -1104,13 +1152,13 @@ impl FillTessellator {
     fn log_sl_points_at(&self, y: FixedPoint32) {
         print!("\nat y={:?}  sl: [", y);
         let mut left = true;
-        for edge in &self.active_edges {
+        for id in self.active_edges.ids() {
             let sep = if left { "|" } else { " " };
             print!("{}", sep);
-            if edge.merge {
+            if self.active_edges.merge[id] {
                 print!("<merge> ");
             } else {
-                let x = line_horizontal_intersection_fixed(&edge.points, y);
+                let x = line_horizontal_intersection_fixed(&self.active_edges.points[id], y);
                 print!("{:?} ", x);
             }
             left = !left;
@@ -1183,20 +1231,6 @@ struct ActiveEdge {
     upper_id: VertexId,
     merge: bool,
 }
-
-impl ActiveEdge {
-    fn merge_vertex(&mut self, vertex: TessPoint, id: VertexId) {
-        self.points.upper = vertex;
-        self.upper_id = id;
-        self.merge = true;
-    }
-
-    fn set_lower_vertex(&mut self, pos: TessPoint) {
-        self.points.lower = pos;
-        self.merge = false;
-    }
-}
-
 
 /// Defines an ordering between two points
 ///
