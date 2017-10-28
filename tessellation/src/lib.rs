@@ -310,7 +310,7 @@ pub enum LineCap {
 pub enum LineJoin {
     /// A sharp corner is to be used to join path segments.
     Miter,
-    /// Same as a miter join, but if the miter limit is exceeded,
+    /// [Not implemented] Same as a miter join, but if the miter limit is exceeded,
     /// the miter is clipped at a miter length equal to the miter limit value
     /// multiplied by the stroke width.
     MiterClip,
@@ -339,7 +339,7 @@ pub struct StrokeOptions {
 
     /// See the SVG specification.
     ///
-    /// Must be greater than or equal to 1.0
+    /// Not implemented yet!
     pub miter_limit: f32,
 
     /// Maximum allowed distance to the path when building an approximation.
@@ -360,19 +360,13 @@ pub struct StrokeOptions {
 }
 
 impl StrokeOptions {
-    /// Minimum and default miter limits as defined by the SVG specification
-    ///
-    /// See [StrokeMiterLimitProperty](https://svgwg.org/specs/strokes/#StrokeMiterlimitProperty)
-    const MINIMUM_MITER_LIMIT:f32 = 1.0;
-    const DEFAULT_MITER_LIMIT:f32 = 4.0;
-
     pub fn default() -> StrokeOptions {
         StrokeOptions {
             start_cap: LineCap::Butt,
             end_cap: LineCap::Butt,
             line_join: LineJoin::Miter,
             line_width: 1.0,
-            miter_limit: StrokeOptions::DEFAULT_MITER_LIMIT,
+            miter_limit: 10.0,
             tolerance: 0.1,
             apply_line_width: true,
             _private: (),
@@ -415,7 +409,6 @@ impl StrokeOptions {
     }
 
     pub fn with_miter_limit(mut self, limit: f32) -> StrokeOptions {
-        assert!(limit >= StrokeOptions::MINIMUM_MITER_LIMIT);
         self.miter_limit = limit;
         return self;
     }
@@ -424,26 +417,4 @@ impl StrokeOptions {
         self.apply_line_width = false;
         return self;
     }
-}
-
-#[test]
-fn test_without_miter_limit(){
-    let expected_limit = 4.0;
-    let stroke_options = StrokeOptions::default();
-
-    assert_eq!(expected_limit, stroke_options.miter_limit);
-}
-
-#[test]
-fn test_with_miter_limit(){
-    let expected_limit = 3.0;
-    let stroke_options = StrokeOptions::default().with_miter_limit(expected_limit);
-
-    assert_eq!(expected_limit, stroke_options.miter_limit);
-}
-
-#[test]
-#[should_panic]
-fn test_with_invalid_miter_limit(){
-    let stroke_options = StrokeOptions::default().with_miter_limit(0.0);
 }
