@@ -98,6 +98,7 @@ pub fn run(cmd: FuzzCmd) -> bool {
                             result.unwrap();
                         }
                     }
+                    Tessellator::Experimental => {}
                 }
             });
 

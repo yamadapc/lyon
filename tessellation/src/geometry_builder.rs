@@ -224,6 +224,8 @@ use std::marker::PhantomData;
 use std::ops::Add;
 use std::convert::From;
 
+use std::u32;
+
 pub type Index = u32;
 
 /// A virtual vertex offset in a geometry.
@@ -235,6 +237,8 @@ pub type Index = u32;
 pub struct VertexId(pub Index);
 
 impl VertexId {
+    pub const INVALID: VertexId = VertexId(u32::MAX);
+
     pub fn offset(&self) -> Index { self.0 }
 }
 

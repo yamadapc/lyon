@@ -6,23 +6,51 @@ use extra::rust_logo::build_logo_path;
 
 use {FillTessellator, FillError, FillOptions, FillVertex};
 
+#[cfg(feature = "experimental")]
+use experimental;
+
+
+#[cfg(not(feature = "experimental"))]
 type Vertex = FillVertex;
+#[cfg(feature = "experimental")]
+type Vertex = Point;
 
 fn tessellate_path(path: PathSlice, log: bool) -> Result<usize, FillError> {
     let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
     {
-        let mut vertex_builder = simple_builder(&mut buffers);
-        let mut tess = FillTessellator::new();
-        if log {
-            tess.enable_logging();
+        let options = FillOptions::tolerance(0.05);
+
+        #[cfg(not(feature = "experimental"))] {
+            let mut tess = FillTessellator::new();
+            let mut vertex_builder = simple_builder(&mut buffers);
+            if log {
+                tess.enable_logging();
+            }
+            try!{
+                tess.tessellate_path(
+                    path.path_iter(),
+                    &options,
+                    &mut vertex_builder
+                )
+            };
         }
-        try!{
-            tess.tessellate_path(
-                path.path_iter(),
-                &FillOptions::tolerance(0.05),
+
+        #[cfg(feature = "experimental")] {
+            use path::builder::*;
+            use path::iterator::*;
+
+            let mut builder = experimental::Path::builder();
+            for e in path.path_iter().flattened(0.05) {
+                builder.flat_event(e);
+            }
+
+            let mut vertex_builder = simple_builder(&mut buffers);
+            experimental::FillTessellator::new().tessellate_path(
+                &builder.build(),
+                &options,
                 &mut vertex_builder
-            )
-        };
+            );
+        }
     }
     return Ok(buffers.indices.len() / 3);
 }
@@ -284,7 +312,7 @@ fn test_auto_intersection_multi() {
 }
 
 #[test]
-fn test_rust_logo() {
+fn test_rust_logo_rotated() {
     let mut path = Path::builder().flattened(0.011).with_svg();
 
     build_logo_path(&mut path);
@@ -1009,4 +1037,20 @@ fn test_no_close() {
 #[test]
 fn test_empty_path() {
     test_path_and_count_triangles(Path::new().as_slice(), 0);
+}
+
+#[test]
+fn test_exp_no_intersection_01() {
+    let mut builder = Path::builder();
+
+    builder.move_to(point(80.041534, 19.24472));
+    builder.line_to(point(76.56131, 23.062233));
+    builder.line_to(point(67.26949, 23.039438));
+    builder.line_to(point(48.42367, 28.978098));
+    builder.close();
+
+    test_path(builder.build().as_slice());
+
+    // SVG path syntax:
+    // "M 80.041534 19.24472 L 76.56131 23.062233 L 67.26949 23.039438 L 48.42367 28.978098 Z"
 }
