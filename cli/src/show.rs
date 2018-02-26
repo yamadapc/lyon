@@ -10,6 +10,8 @@ use lyon::path::default::Path;
 use lyon::path::builder::*;
 use commands::{TessellateCmd, AntiAliasing, RenderCmd, Tessellator, Background};
 use lyon::tess2;
+#[cfg(feature = "experimental")]
+use lyon::tessellation::experimental;
 
 use gfx;
 use gfx_window_glutin;
@@ -105,6 +107,25 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
                     &options,
                     &mut BuffersBuilder::new(&mut geometry, WithId(0))
                 ).unwrap();
+            }
+            Tessellator::Experimental => {
+                #[cfg(feature = "experimental")] {
+                    use lyon::path::builder::*;
+                    use lyon::path::iterator::*;
+
+                    println!(" -- running the experimental tessellator.");
+
+                    let mut builder = experimental::Path::builder();
+                    for e in cmd.path.path_iter().flattened(0.1) {
+                        builder.flat_event(e);
+                    }
+
+                    experimental::FillTessellator::new().tessellate_path(
+                        &builder.build(),
+                        &options,
+                        &mut BuffersBuilder::new(&mut geometry, WithId(0))
+                    )
+                }
             }
         }
     }
