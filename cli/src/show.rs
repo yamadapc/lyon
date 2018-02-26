@@ -10,6 +10,8 @@ use lyon::path::default::Path;
 use lyon::path::builder::*;
 use commands::{TessellateCmd, AntiAliasing, RenderCmd, Tessellator, Background};
 use lyon::tess2;
+#[cfg(feature = "experimental")]
+use lyon::tessellation::experimental;
 
 use gfx;
 use gfx_window_glutin;
@@ -106,6 +108,37 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
                     &options,
                     &mut BuffersBuilder::new(&mut geometry, WithId(0))
                 ).unwrap();
+            }
+            Tessellator::Experimental => {
+                #[cfg(feature = "experimental")] {
+                    use lyon::path::builder::*;
+                    use lyon::path::iterator::*;
+
+                    println!(" -- running the experimental tessellator.");
+
+                    let mut builder = experimental::Path::builder();
+                    for e in cmd.path.path_iter().flattened(options.tolerance) {
+                        println!("{:?}", e);
+                        builder.flat_event(e);
+                    }
+
+                    let mut tess = experimental::FillTessellator::new();
+                    let dbg_receiver = render_options.debugger.map(|flags| {
+                        let (dbg_tx, dbg_rx) = debugger_channel();
+                        tess.install_debugger(Box::new(Filter::new(flags, dbg_tx)));
+                        tess.enable_logging();
+                        dbg_rx
+                    });
+
+                    tess.tessellate_path(
+                        &builder.build(),
+                        &options,
+                        &mut BuffersBuilder::new(&mut geometry, WithId(0))
+                    );
+                    if let Some(dbg) = dbg_receiver {
+                        dbg.write_trace(&mut debug_trace);
+                    }
+                }
             }
         }
     }
