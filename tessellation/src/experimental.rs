@@ -13,6 +13,19 @@ use std::{u16, f32};
 
 pub type Vertex = Point;
 
+macro_rules! tess_log {
+    ($obj:ident, $fmt:expr) => (
+        if $obj.log {
+            println!($fmt);
+        }
+    );
+    ($obj:ident, $fmt:expr, $($arg:tt)*) => (
+        if $obj.log {
+            println!($fmt, $($arg)*);
+        }
+    );
+}
+
 macro_rules! impl_id {
     ($Name:ident) => (
         #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -155,18 +168,28 @@ struct Event {
 
 pub struct Builder {
     path: Path,
+    tolerance: f32,
 }
 
 impl Builder {
     pub fn new() -> Self {
+        Builder::with_tolerance(FillOptions::DEFAULT_TOLERANCE)
+    }
+
+    pub fn with_tolerance(tolerance: f32,) -> Self {
         Builder {
             path: Path::new(),
+            tolerance,
         }
     }
 
     pub fn line_to(&mut self, to_pos: Point) {
         if self.path.endpoints.is_empty() {
             self.path.endpoints.push(point(0.0, 0.0));
+        }
+
+        if self.segment_is_too_small(&to_pos) {
+            return;
         }
 
         let from = EndpointId((self.path.endpoints.len() - 1) as u16);
@@ -203,18 +226,6 @@ impl Builder {
                 monotonic.segment().to
             );
         });
-    }
-
-    fn monotonic_quadratic_bezier_to(&mut self, ctrl_pos: Point, to_pos: Point) {
-
-        let from = EndpointId((self.path.endpoints.len() - 1) as u16);
-        let to = EndpointId(from.0 + 1);
-        self.path.endpoints.push(to_pos);
-
-        let ctrl = CtrlPointId((self.path.ctrl_points.len() - 1) as u16);
-        self.path.ctrl_points.push(ctrl_pos);
-
-        self.path.segments.push(Segment{ from, ctrl, to });
     }
 
     pub fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) {
@@ -260,13 +271,31 @@ impl Builder {
         );
     }
 
+    fn segment_is_too_small(&self, to: &Point) -> bool {
+        (*self.path.endpoints.last().unwrap() - *to).square_length() < self.tolerance * self.tolerance
+    }
+
+    fn monotonic_quadratic_bezier_to(&mut self, ctrl_pos: Point, to_pos: Point) {
+        if self.segment_is_too_small(&to_pos) {
+            return;
+        }
+        let from = EndpointId((self.path.endpoints.len() - 1) as u16);
+        let to = EndpointId(from.0 + 1);
+        self.path.endpoints.push(to_pos);
+
+        let ctrl = CtrlPointId((self.path.ctrl_points.len() - 1) as u16);
+        self.path.ctrl_points.push(ctrl_pos);
+
+        self.path.segments.push(Segment{ from, ctrl, to });
+    }
+
     fn end_sub_path(&mut self, is_closed: bool) {
         let mut sp_end = self.path.segments.len();
         let sp_start = self.path.sub_paths.last()
             .map(|sp| sp.range.end)
             .unwrap_or(0);
 
-        if sp_end >= sp_start {
+        if sp_end > sp_start {
             if is_closed && !self.path.endpoints.is_empty() {
                 let first = self.path.sub_paths.last().map(|sp|{
                     self.path.segments[sp.range.start].from.0 as usize
@@ -332,6 +361,7 @@ pub struct FillTessellator {
     fill_rule: FillRule,
     events: Vec<Event>,
     fill: Spans,
+    log: bool,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -530,7 +560,8 @@ impl FillTessellator {
             events: Vec::new(),
             fill: Spans {
                 spans: Vec::new(),
-            }
+            },
+            log: true,
         }
     }
 
@@ -553,7 +584,11 @@ impl FillTessellator {
         assert!(self.active.edges.is_empty());
         assert!(self.fill.spans.is_empty());
 
-        println!("\n ***************** \n");
+        tess_log!(self, "\n ***************** \n");
+    }
+
+    pub fn enable_logging(&mut self) {
+        self.log = true;
     }
 
     fn tessellator_loop(&mut self, path: &Path, output: &mut dyn GeometryBuilder<Vertex>) {
@@ -636,8 +671,7 @@ impl FillTessellator {
         edges_above: u32,
         output: &mut dyn GeometryBuilder<Vertex>,
     ) {
-        println!("");
-        println!(" --- events at [{}, {}]                       {} -> {}",
+        tess_log!(self, "\n --- events at [{}, {}]                       {} -> {}",
             current_pos.x, current_pos.y,
             edges_above, self.pending_edges.len(),
         );
@@ -670,7 +704,7 @@ impl FillTessellator {
                 // invalidate the indices of other postponed events on the right
                 // side of the merge.
 
-                println!(" Resolve merge event {} at {:?} ending span {}", i, active_edge.to, winding.span_index);
+                tess_log!(self, " Resolve merge event {} at {:?} ending span {}", i, active_edge.to, winding.span_index);
 
                 //  \...\ /.
                 //   \...x..  <-- merge vertex
@@ -726,13 +760,13 @@ impl FillTessellator {
                 }
             } else {
                 let ex = active_edge.solve_x_for_y(current_pos.y);
-                println!("ex: {}", ex);
+                tess_log!(self, "ex: {}", ex);
 
                 if ex == current_pos.x {
                     //connecting_edges = true;
                     // TODO
                     //unimplemented!();
-                    println!(" -- vertex on an edge!");
+                    tess_log!(self, " -- vertex on an edge!");
                 }
 
                 if ex > current_pos.x {
@@ -748,7 +782,7 @@ impl FillTessellator {
                 // ---\---:---/----  <-- sweep line
                 //     \..:../
 
-                println!(" bump span idx because of merge vertex");
+                tess_log!(self, " bump span idx because of merge vertex");
 
                 // An unresolved merge vertex implies the left and right spans are
                 // adjacent and there is no transition between the two which means
@@ -778,7 +812,7 @@ impl FillTessellator {
                 continue;
             }
 
-            println!("{:?}", winding.transition);
+            tess_log!(self, "{:?}", winding.transition);
 
             match winding.transition {
                 Transition::Out => {
@@ -796,7 +830,7 @@ impl FillTessellator {
                         // order to separate the analysis of the sweep line and the
                         // mutations into two phases.
 
-                        println!(" ** end ** edges: [{}, {}] span: {}",
+                        tess_log!(self, " ** end ** edges: [{}, {}] span: {}",
                             in_idx, i,
                             winding.span_index
                         );
@@ -826,7 +860,7 @@ impl FillTessellator {
         // Fix up above index range in case there was no connecting edges.
         above.start = usize::min(above.start, above.end);
 
-        println!("connecting edges: {}..{}", above.start, above.end);
+        tess_log!(self, "connecting edges: {}..{}", above.start, above.end);
 
         let mut winding = winding_below.unwrap_or(winding);
         let mut prev_transition_in = None;
@@ -841,7 +875,7 @@ impl FillTessellator {
             //  ....\
             //
 
-            println!(" ** right ** edge: {} span: {}", idx, winding.span_index);
+            tess_log!(self, " ** right ** edge: {} span: {}", idx, winding.span_index);
 
             self.fill.spans[winding.span_index as usize].vertex(
                 current_pos,
@@ -856,7 +890,7 @@ impl FillTessellator {
             //  .....x.....
             //
 
-            println!(" ** merge ** edges: [{}, {}] span: {}",
+            tess_log!(self, " ** merge ** edges: [{}, {}] span: {}",
                 in_idx, above.end - 1,
                 winding.span_index
             );
@@ -881,7 +915,7 @@ impl FillTessellator {
             //     \...
             //
 
-            println!(" ** left ** edge {} span: {}", above.start, winding.span_index);
+            tess_log!(self, " ** left ** edge {} span: {}", above.start, winding.span_index);
 
             self.fill.spans[winding.span_index as usize].vertex(
                 current_pos,
@@ -902,7 +936,7 @@ impl FillTessellator {
             //  .../   \...
             //
 
-            println!(" ** split ** edge {} span: {}", above.start, winding.span_index);
+            tess_log!(self, " ** split ** edge {} span: {}", above.start, winding.span_index);
             let edge_above = above.start - 1;
 
             let upper_pos = self.active.edges[edge_above].from;
@@ -918,7 +952,7 @@ impl FillTessellator {
                 //  ....x....   <-- current split vertex
                 //  .../ \...
                 //
-                println!("   -> merge+split");
+                tess_log!(self, "   -> merge+split");
                 let span_index = winding.span_index as usize;
 
                 self.fill.spans[span_index - 1].vertex(
@@ -972,7 +1006,7 @@ impl FillTessellator {
                 Transition::Out => {
                     if let Some(in_idx) = prev_transition_in {
 
-                        println!(" ** start ** edges: [{}, {}] span: {}", in_idx, i, winding.span_index);
+                        tess_log!(self, " ** start ** edges: [{}, {}] span: {}", in_idx, i, winding.span_index);
 
                         // Start event.
                         //
@@ -984,7 +1018,7 @@ impl FillTessellator {
                         // TODO: if this is an intersection we must create a vertex
                         // and use it instead of the upper endpoint of the edge.
                         let vertex = self.pending_edges[in_idx].upper_vertex;
-                        println!(" begin span {} ({})", winding.span_index, self.fill.spans.len());
+                        tess_log!(self, " begin span {} ({})", winding.span_index, self.fill.spans.len());
                         self.fill.begin_span(
                             winding.span_index,
                             &current_pos,
@@ -998,21 +1032,21 @@ impl FillTessellator {
 
         self.update_active_edges(above);
 
-        println!("sweep line: {}", self.active.edges.len());
+        tess_log!(self, "sweep line: {}", self.active.edges.len());
         for e in &self.active.edges {
             if e.is_merge {
-                println!("| (merge) {}", e.from);
+                tess_log!(self, "| (merge) {}", e.from);
             } else {
-                println!("| {} -> {}", e.from, e.to);
+                tess_log!(self, "| {} -> {}", e.from, e.to);
             }
         }
-        println!("spans: {}", self.fill.spans.len());
+        tess_log!(self, "spans: {}", self.fill.spans.len());
     }
 
     fn update_active_edges(&mut self, above: Range<usize>) {
         // Remove all edges from the "above" range except merge
         // vertices.
-        println!(" remove {} edges ({}..{})", above.end - above.start, above.start, above.end);
+        tess_log!(self, " remove {} edges ({}..{})", above.end - above.start, above.start, above.end);
         let mut rm_index = above.start;
         for _ in 0..(above.end - above.start) {
             if self.active.edges[rm_index].is_merge {
@@ -1086,7 +1120,6 @@ use geometry_builder::{VertexBuffers, simple_builder};
 
 #[test]
 fn new_tess1() {
-    println!("");
 
     let mut builder = Builder::new();
     builder.move_to(point(0.0, 0.0));
@@ -1120,7 +1153,6 @@ fn new_tess1() {
 
 #[test]
 fn new_tess_merge() {
-    println!("");
 
     let mut builder = Builder::new();
     builder.move_to(point(0.0, 0.0));  // start
