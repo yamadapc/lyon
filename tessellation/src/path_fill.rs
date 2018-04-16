@@ -1809,7 +1809,15 @@ impl MonotoneTessellator {
         self.triangles.push((a.id, b.id, c.id));
     }
 
-    pub fn flush(&mut self, output: &mut dyn GeometryBuilder<Vertex>) {
+    fn flush(&mut self, output: &mut dyn GeometryBuilder<Vertex>) {
+        for &(a, b, c) in &self.triangles {
+            output.add_triangle(a, b, c);
+        }
+        self.triangles.clear();
+    }
+
+    #[cfg(feature="experimental")]
+    pub(crate) fn flush_experimental(&mut self, output: &mut dyn GeometryBuilder<Point>) {
         for &(a, b, c) in &self.triangles {
             output.add_triangle(a, b, c);
         }

@@ -6,23 +6,48 @@ use extra::rust_logo::build_logo_path;
 
 use {FillTessellator, FillError, FillOptions, FillVertex};
 
+#[cfg(feature = "experimental")]
+use experimental;
+
+
 type Vertex = FillVertex;
 
 fn tessellate_path(path: PathSlice, log: bool) -> Result<usize, FillError> {
     let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
     {
-        let mut vertex_builder = simple_builder(&mut buffers);
-        let mut tess = FillTessellator::new();
-        if log {
-            tess.enable_logging();
+        let options = FillOptions::tolerance(0.05);
+
+        #[cfg(not(feature = "experimental"))] {
+            let mut tess = FillTessellator::new();
+            let mut vertex_builder = simple_builder(&mut buffers);
+            if log {
+                tess.enable_logging();
+            }
+            try!{
+                tess.tessellate_path(
+                    path.path_iter(),
+                    &options,
+                    &mut vertex_builder
+                )
+            };
         }
-        try!{
-            tess.tessellate_path(
-                path.path_iter(),
-                &FillOptions::tolerance(0.05),
+
+        #[cfg(feature = "experimental")] {
+            use path::builder::*;
+            use path::iterator::*;
+
+            let mut builder = experimental::Path::builder();
+            for e in path.path_iter().flattened(0.05) {
+                builder.flat_event(e);
+            }
+
+            let mut vertex_builder = simple_builder(&mut buffers);
+            experimental::FillTessellator::new().tessellate_path(
+                &builder.build(),
+                &options,
                 &mut vertex_builder
-            )
-        };
+            );
+        }
     }
     return Ok(buffers.indices.len() / 3);
 }

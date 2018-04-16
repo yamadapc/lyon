@@ -417,14 +417,14 @@ impl Spans {
         span_idx: SpanIdx,
         position: &Point,
         id: VertexId,
-        output: &mut GeometryBuilder<Vertex>,
+        output: &mut dyn GeometryBuilder<Vertex>,
     ) {
         let idx = span_idx as usize;
 
         {
             let tess = &mut self.spans[idx];
             tess.end(*position, id);
-            tess.flush(output);
+            tess.flush_experimental(output);
         }
 
         self.spans.remove(idx);
@@ -462,7 +462,7 @@ impl Spans {
         current_vertex: VertexId,
         merge_position: &Point,
         merge_vertex: VertexId,
-        output: &mut GeometryBuilder<Vertex>,
+        output: &mut dyn GeometryBuilder<Vertex>,
     ) {
         //  \...\ /.
         //   \...x..  <-- merge vertex
@@ -538,7 +538,7 @@ impl FillTessellator {
         &mut self,
         path: &Path,
         options: &FillOptions,
-        builder: &mut GeometryBuilder<Vertex>
+        builder: &mut dyn GeometryBuilder<Vertex>
     ) {
         self.fill_rule = options.fill_rule;
 
@@ -556,7 +556,7 @@ impl FillTessellator {
         println!("\n ***************** \n");
     }
 
-    fn tessellator_loop(&mut self, path: &Path, output: &mut GeometryBuilder<Vertex>) {
+    fn tessellator_loop(&mut self, path: &Path, output: &mut dyn GeometryBuilder<Vertex>) {
         while let Some(event) = self.events.pop() {
             let segment_id_a = event.segment;
             let current_endpoint = path.segment_from(segment_id_a);
@@ -634,7 +634,7 @@ impl FillTessellator {
         current_vertex: VertexId,
         current_endpoint: EndpointId,
         edges_above: u32,
-        output: &mut GeometryBuilder<Vertex>,
+        output: &mut dyn GeometryBuilder<Vertex>,
     ) {
         println!("");
         println!(" --- events at [{}, {}]                       {} -> {}",
@@ -1116,8 +1116,6 @@ fn new_tess1() {
         &FillOptions::default(),
         &mut simple_builder(&mut buffers),
     );
-
-    panic!();
 }
 
 #[test]
@@ -1145,8 +1143,6 @@ fn new_tess_merge() {
         &FillOptions::default(),
         &mut simple_builder(&mut buffers),
     );
-
-    panic!();
 }
 
 // "m 85.728423,257.84471 -21.7607,-11.36642 85.533557,82.88722 80.86714,-82.2058 z m 60.609997,8.9 12.8,13.14 h -26.33 l 13.55,-13.16 z"
