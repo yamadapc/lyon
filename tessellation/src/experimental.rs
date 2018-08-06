@@ -11,6 +11,12 @@ use path_fill::MonotoneTessellator;
 use path::builder::*;
 use std::{u16, f32};
 
+
+#[cfg(feature="debugger")]
+use debugger::*;
+#[cfg(feature="debugger")]
+use path_fill::dbg;
+
 pub type Vertex = Point;
 
 macro_rules! tess_log {
@@ -169,6 +175,7 @@ struct Event {
 pub struct Builder {
     path: Path,
     tolerance: f32,
+    in_sub_path: bool,
 }
 
 impl Builder {
@@ -176,22 +183,24 @@ impl Builder {
         Builder::with_tolerance(FillOptions::DEFAULT_TOLERANCE)
     }
 
-    pub fn with_tolerance(tolerance: f32,) -> Self {
+    pub fn with_tolerance(tolerance: f32) -> Self {
         Builder {
             path: Path::new(),
             tolerance,
+            in_sub_path: false,
         }
     }
 
-    pub fn line_to(&mut self, to_pos: Point) {
+    pub fn line_to(&mut self, to_pos: Point) -> bool {
         if self.path.endpoints.is_empty() {
             self.path.endpoints.push(point(0.0, 0.0));
         }
 
         if self.segment_is_too_small(&to_pos) {
-            return;
+            return false;
         }
 
+        self.in_sub_path = true;
         let from = EndpointId((self.path.endpoints.len() - 1) as u16);
         let ctrl = CtrlPointId::INVALID;
         let to = EndpointId(from.0 + 1);
@@ -199,6 +208,8 @@ impl Builder {
         self.path.endpoints.push(to_pos);
 
         self.path.segments.push(Segment { from, ctrl, to });
+
+        true
     }
 
     pub fn move_to(&mut self, to_pos: Point) {
@@ -215,13 +226,14 @@ impl Builder {
             self.path.endpoints.push(point(0.0, 0.0));
         }
 
+        self.in_sub_path = true;
         // TODO: decompose into monotonic segments.
         QuadraticBezierSegment {
             from: *self.path.endpoints.last().unwrap(),
             ctrl: ctrl_pos,
             to: to_pos,
         }.for_each_monotonic(&mut |monotonic| {
-            self.quadratic_bezier_to(
+            self.monotonic_quadratic_bezier_to(
                 monotonic.segment().from,
                 monotonic.segment().to
             );
@@ -233,8 +245,9 @@ impl Builder {
             self.path.endpoints.push(point(0.0, 0.0));
         }
 
-        let tolerance = 0.1;
+        self.in_sub_path = true;
 
+        let tolerance = 0.1;
         cubic_to_monotonic_quadratics(
             &CubicBezierSegment {
                 from: *self.path.endpoints.last().unwrap(),
@@ -257,6 +270,7 @@ impl Builder {
             self.path.endpoints.push(point(0.0, 0.0));
         }
 
+        self.in_sub_path = true;
         let from = *self.path.endpoints.last().unwrap();
         let start_angle = (from - center).angle_from_x_axis() - x_rotation;
 
@@ -290,20 +304,24 @@ impl Builder {
     }
 
     fn end_sub_path(&mut self, is_closed: bool) {
+        if !self.in_sub_path {
+            return;
+        }
         let mut sp_end = self.path.segments.len();
         let sp_start = self.path.sub_paths.last()
             .map(|sp| sp.range.end)
             .unwrap_or(0);
-
+        println!("start: {:?} end {:?}", sp_start, sp_end);
         if sp_end > sp_start {
             if is_closed && !self.path.endpoints.is_empty() {
-                let first = self.path.sub_paths.last().map(|sp|{
-                    self.path.segments[sp.range.start].from.0 as usize
-                }).unwrap_or(0);
+                // TODO: this is wrong, the last sub path in the array is the one we
+                // previously finished, not the one we are currently building.
+                let first = self.path.segments[sp_start].from.0 as usize;
                 let first_point = self.path.endpoints[first];
-                self.line_to(first_point);
-
-                sp_end += 1;
+                println!("close sub path at {} ({:?})", first_point, first);
+                if self.line_to(first_point) {
+                    sp_end += 1;
+                }
             }
 
             self.path.sub_paths.push(SubPathInfo {
@@ -311,6 +329,8 @@ impl Builder {
                 is_closed,
             });
         }
+
+        self.in_sub_path = false;
     }
 
     pub fn build(self) -> Path {
@@ -362,6 +382,9 @@ pub struct FillTessellator {
     events: Vec<Event>,
     fill: Spans,
     log: bool,
+
+    #[cfg(feature="debugger")]
+    debugger: Option<Box<dyn Debugger2D>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -562,6 +585,9 @@ impl FillTessellator {
                 spans: Vec::new(),
             },
             log: true,
+
+            #[cfg(feature="debugger")]
+            debugger: None,
         }
     }
 
@@ -721,6 +747,8 @@ impl FillTessellator {
                     merge_vertex,
                     output,
                 );
+
+                debugger_monotone_split(&self.debugger, &merge_position, &current_pos);
 
                 // Fix up the active edge.
                 // It's not 100% clear whether we need to do all of this, other
@@ -990,6 +1018,8 @@ impl FillTessellator {
                 );
             }
 
+            debugger_monotone_split(&self.debugger, &upper_pos, &current_pos);
+
             winding.span_index += 1;
         }
 
@@ -1086,6 +1116,21 @@ impl FillTessellator {
             b.angle.partial_cmp(&a.angle).unwrap_or(Ordering::Equal)
         });
     }
+
+    #[cfg(feature="debugger")]
+    pub fn install_debugger(&mut self, dbg: Box<dyn Debugger2D>) {
+        self.debugger = Some(dbg)
+    }
+
+}
+
+#[inline(always)]
+fn debugger_monotone_split(debugger: &Option<Box<dyn Debugger2D>>, a: &Point, b: &Point) {
+    #[cfg(feature="debugger")] {
+        if let Some(ref dbg) = debugger {
+            dbg.edge(a, b, DARK_RED, dbg::MONOTONE_SPLIT);
+        }
+    }
 }
 
 fn points_are_equal(a: Point, b: Point) -> bool {
@@ -1178,3 +1223,5 @@ fn new_tess_merge() {
 }
 
 // "m 85.728423,257.84471 -21.7607,-11.36642 85.533557,82.88722 80.86714,-82.2058 z m 60.609997,8.9 12.8,13.14 h -26.33 l 13.55,-13.16 z"
+
+// RUST_BACKTRACE=1 cargo run --features="experimental" -- show "m 798.25357,129.56135 c -7.5,7.2 -14.54,14.1 -17.1,23.7 h 4.02 l 3.6,15.66 2.74,-3.16 7.12,0.32 -3.6,-7.6 c 4.34,-16.55 8.5,-14.2 3.22,-28.9 z" -fs --tessellator experimental --enable-debugger-2d all
