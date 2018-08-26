@@ -10,7 +10,7 @@ use std::ops::Range;
 use path_fill::MonotoneTessellator;
 use path::builder::*;
 use std::{u16, u32, f32};
-
+use std::env;
 
 #[cfg(feature="debugger")]
 use debugger::*;
@@ -609,7 +609,7 @@ impl FillTessellator {
             fill: Spans {
                 spans: Vec::new(),
             },
-            log: true,
+            log: env::var("LYON_FORCE_LOGGING").is_ok(),
 
             #[cfg(feature="debugger")]
             debugger: None,
@@ -771,23 +771,41 @@ impl FillTessellator {
         // current position.
 
         for (i, active_edge) in self.active.edges.iter_mut().enumerate() {
-            if active_edge.is_merge && connecting_edges {
-                merges_to_resolve.push((winding.span_index, i));
-                active_edge.to = self.current_position;
-                // This is probably not necessary but it's confusing to have the two
-                // not matching.
-                self.active.aux[i].to_id = current_endpoint;
+            // First deal with the merge case.
+            if active_edge.is_merge {
+                if connecting_edges {
+                    merges_to_resolve.push((winding.span_index, i));
+                    active_edge.to = self.current_position;
+                    // This is probably not necessary but it's confusing to have the two
+                    // not matching.
+                    self.active.aux[i].to_id = current_endpoint;
 
-                // Bump the span index since the current span will be removed
-                // later. If this is the index of the first touching span, then
-                // we need to bump that one too.
-                if let Some(ref mut below) = winding_below {
-                    if below.span_index == winding.span_index {
-                        below.span_index += 1;
+                    // Bump the span index since the current span will be removed
+                    // later. If this is the index of the first touching span, then
+                    // we need to bump that one too.
+                    if let Some(ref mut below) = winding_below {
+                        if below.span_index == winding.span_index {
+                            below.span_index += 1;
+                        }
                     }
+                    winding.span_index += 1;
+                } else {
+                    // \.....\ /...../
+                    //  \.....x...../   <--- merge vertex
+                    //   \....:..../
+                    // ---\---:---/----  <-- sweep line
+                    //     \..:../
+
+                    // An unresolved merge vertex implies the left and right spans are
+                    // adjacent and there is no transition between the two which means
+                    // we need to bump the span index manually.
+                    winding.span_index += 1;
                 }
-                winding.span_index += 1;
+
+                continue;
             }
+
+            // From there on we can assume the active edge is not a merge.
 
             let was_connecting_edges = connecting_edges;
 
@@ -800,7 +818,7 @@ impl FillTessellator {
                 let ex = active_edge.solve_x_for_y(self.current_position.y);
                 tess_log!(self, "ex: {}", ex);
 
-                if ex == self.current_position.x {
+                if ex == self.current_position.x && !active_edge.is_merge {
                     tess_log!(self, " -- vertex on an edge!");
                     edges_to_split.push(i);
 
@@ -813,25 +831,7 @@ impl FillTessellator {
                 }
             }
 
-            if connecting_edges || !active_edge.is_merge {
-                // (common case)
-                self.fill_rule.update_winding(&mut winding, active_edge.winding);
-            } else {
-                // \.....\ /...../
-                //  \.....x...../   <--- merge vertex
-                //   \....:..../
-                // ---\---:---/----  <-- sweep line
-                //     \..:../
-
-                // An unresolved merge vertex implies the left and right spans are
-                // adjacent and there is no transition between the two which means
-                // we need to bump the span index manually.
-                winding.span_index += 1;
-
-                // If we were connecting we should have already resolved this merge
-                // event.
-                debug_assert!(!connecting_edges);
-            }
+            self.fill_rule.update_winding(&mut winding, active_edge.winding);
 
             if !was_connecting_edges && connecting_edges {
                 // We just started connecting edges above the current point.
@@ -847,34 +847,34 @@ impl FillTessellator {
 
             tess_log!(self, "{:?}", winding.transition);
 
-            match winding.transition {
-                Transition::Out => {
-                    if first_transition_above {
-                        if self.edges_below.is_empty() {
-                            // Merge event.
-                            pending_merge = Some(i);
-                        } else {
-                            // Right event.
-                            pending_right = Some(i);
-                        }
-                    } else if let Some(in_idx) = prev_transition_in.take() {
-                        tess_log!(self, " ** end ** edges: [{}, {}] span: {}",
-                            in_idx, i,
-                            winding.span_index
-                        );
-
-                        if winding.span_index < self.fill.spans.len() as i32 {
-                            spans_to_end.push(winding.span_index);
-                            winding.span_index += 1; // not sure
-                        } else {
-                            // error!
-                        }
-                    }
-                }
-                Transition::In => {
+            match (winding.transition, first_transition_above) {
+                (Transition::In, _) => {
                     prev_transition_in = Some(i);
                 }
-                Transition::None => {}
+                (Transition::Out, true) => {
+                    if self.edges_below.is_empty() {
+                        // Merge event.
+                        pending_merge = Some(i);
+                    } else {
+                        // Right event.
+                        pending_right = Some(i);
+                    }
+                }
+                (Transition::Out, false) => {
+                    let in_idx = prev_transition_in.unwrap();
+                    tess_log!(self, " ** end ** edges: [{}, {}] span: {}",
+                        in_idx, i,
+                        winding.span_index
+                    );
+
+                    if winding.span_index < self.fill.spans.len() as i32 {
+                        spans_to_end.push(winding.span_index);
+                        winding.span_index += 1; // not sure
+                    } else {
+                        // error!
+                    }
+                }
+                (Transition::None, _) => {}
             }
 
             if winding.transition != Transition::None {
@@ -989,6 +989,7 @@ impl FillTessellator {
 
         } else if winding.transition == Transition::In && self.edges_below.len() % 2 == 1 {
             // TODO: cond self.edges_below.len() % 2 == 1 is wrong if we had a right event
+            // and also assumes even-odd fil rule.
 
             // Left event.
             //
@@ -1030,7 +1031,7 @@ impl FillTessellator {
                 //  ...\ /...
                 //  ....x....   <-- merge vertex (upper)
                 //  ....:....
-                //  ....x....   <-- current split vertex
+                //  ----x----   <-- current split vertex
                 //  .../ \...
                 //
                 tess_log!(self, "   -> merge+split");
@@ -1085,9 +1086,11 @@ impl FillTessellator {
 
             match winding.transition {
                 Transition::In => {
+                    println!("below: in");
                     prev_transition_in = Some(i);
                 }
                 Transition::Out => {
+                    println!("below: out");
                     if let Some(in_idx) = prev_transition_in {
 
                         tess_log!(self, " ** start ** edges: [{}, {}] span: {}", in_idx, i, winding.span_index);
