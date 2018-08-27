@@ -203,7 +203,10 @@ fn test_simple_1() {
     path.close();
 
     test_path_with_rotations(path.build(), 0.001, Some(4));
+
+    // "M 0 0 L 1 1 L 2 0 L 1 3 L 0 4 L 0 3 Z"
 }
+
 
 #[test]
 fn test_simple_2() {
