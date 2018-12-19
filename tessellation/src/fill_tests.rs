@@ -328,7 +328,7 @@ fn test_auto_intersection_multi() {
 }
 
 #[test]
-fn test_rust_logo_rotated() {
+fn test_rust_logo_basic() {
     let mut path = Path::builder().flattened(0.011).with_svg();
 
     build_logo_path(&mut path);
