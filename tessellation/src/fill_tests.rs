@@ -10,7 +10,8 @@ use {FillTessellator, FillError, FillOptions, FillVertex};
 use experimental;
 
 
-type Vertex = FillVertex;
+#[cfg(not(feature = "experimental"))] type Vertex = FillVertex;
+#[cfg(feature = "experimental")] type Vertex = Point;
 
 fn tessellate_path(path: PathSlice, log: bool) -> Result<usize, FillError> {
     let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
@@ -309,7 +310,7 @@ fn test_auto_intersection_multi() {
 }
 
 #[test]
-fn test_rust_logo() {
+fn test_rust_logo_basic() {
     let mut path = Path::builder().flattened(0.011).with_svg();
 
     build_logo_path(&mut path);

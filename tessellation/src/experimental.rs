@@ -1187,7 +1187,7 @@ fn new_tess1() {
 
     let mut tess = FillTessellator::new();
 
-    let mut buffers: VertexBuffers<Vertex> = VertexBuffers::new();
+    let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
 
     tess.tessellate_path(
         &path,
@@ -1213,7 +1213,7 @@ fn new_tess_merge() {
 
     let mut tess = FillTessellator::new();
 
-    let mut buffers: VertexBuffers<Vertex> = VertexBuffers::new();
+    let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
 
     tess.tessellate_path(
         &path,
