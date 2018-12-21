@@ -150,25 +150,29 @@ impl Path {
     }
 
 
-    fn sort(&self, events: &mut Vec<Event>) {
+    fn sort(&self, events: &mut Traversal) {
+        let mut alloc_size = 0;
+        for sub_path in &self.sub_paths {
+            alloc_size += sub_path.range.end - sub_path.range.start;
+        }
+
+        events.reserve(alloc_size);
+
         for sub_path in &self.sub_paths {
             if sub_path.range.end - sub_path.range.start < 2 {
                 continue;
             }
             for i in sub_path.range.clone() {
-                events.push(Event {
-                    vertex: self.segments[i].from,
-                    segment: SegmentId::from_usize(i),
-                });
+                let endpoint = self.segments[i].from;
+                events.push(
+                    self.endpoint(endpoint),
+                    endpoint,
+                    SegmentId::from_usize(i),
+                );
             }
         }
 
-        events.sort_by(|a, b| {
-            compare_positions(
-                self.endpoints[a.vertex.0 as usize],
-                self.endpoints[b.vertex.0 as usize],
-            )
-        });
+        events.sort();
     }
 }
 
@@ -618,7 +622,7 @@ impl FillTessellator {
     ) {
         self.fill_rule = options.fill_rule;
 
-        let mut events = Vec::new();
+        let mut events = Traversal::new();
 
         path.sort(&mut events);
 
@@ -641,101 +645,82 @@ impl FillTessellator {
     fn tessellator_loop(
         &mut self,
         path: &Path,
-        events: &mut Vec<Event>,
+        events: &mut Traversal,
         output: &mut dyn GeometryBuilder<Vertex>
     ) {
-        let mut events = events.iter();
-        let mut next_event = events.next();
-        self.current_position = point(f32::MIN, f32::MIN);
-        loop {
-            let mut pending_events = false;
-            let mut next_position = None;
+        let mut current_event = events.first_id();
+        while events.valid_id(current_event) {
             let mut edges_above = 0;
-            let mut vertex_id = VertexId::INVALID;
-            let mut current_endpoint = EndpointId::INVALID;
-            while let Some(event) = next_event {
-                let segment_id_a = event.segment;
-                current_endpoint = path.segment_from(segment_id_a);
-                let current_pos = path.endpoint(current_endpoint);
-                println!("event at {:?}", current_pos);
-                if current_pos == self.current_position {
-                    next_event = events.next();
+            self.current_position = events.position(current_event);
+            let current_endpoint = events.endpoint(current_event);
+            let vertex_id = output.add_vertex(self.current_position);
 
-                    let segment_id_b = path.previous_segment(segment_id_a);
-                    let endpoint_id_b = path.segment_from(segment_id_b);
-                    let endpoint_id_a = path.segment_to(segment_id_a);
-                    let endpoint_pos_a = path.endpoint(endpoint_id_a);
-                    let endpoint_pos_b = path.endpoint(endpoint_id_b);
-                    let after_a = is_after(current_pos, endpoint_pos_a);
-                    let after_b = is_after(current_pos, endpoint_pos_b);
+            let mut current_sibling = current_event;
+            while events.valid_id(current_sibling) {
+                let segment_id_a = events.segment(current_sibling);
+                let segment_id_b = path.previous_segment(segment_id_a);
+                let endpoint_id_b = path.segment_from(segment_id_b);
+                let endpoint_id_a = path.segment_to(segment_id_a);
+                let endpoint_pos_a = path.endpoint(endpoint_id_a);
+                let endpoint_pos_b = path.endpoint(endpoint_id_b);
+                let after_a = is_after(self.current_position, endpoint_pos_a);
+                let after_b = is_after(self.current_position, endpoint_pos_b);
 
-                    vertex_id = output.add_vertex(current_pos);
+                if after_a {
+                    edges_above += 1;
+                } else {
+                    let ctrl_id_a = path.segment_ctrl(segment_id_a);
+                    self.edges_below.push(PendingEdge {
+                        from: self.current_position,
+                        ctrl: path.ctrl_point(ctrl_id_a),
+                        to: endpoint_pos_a,
 
-                    if after_a {
-                        edges_above += 1;
-                    } else {
-                        let ctrl_id_a = path.segment_ctrl(segment_id_a);
-                        self.edges_below.push(PendingEdge {
-                            from: current_pos,
-                            ctrl: path.ctrl_point(ctrl_id_a),
-                            to: endpoint_pos_a,
+                        range_start: 0.0,
+                        angle: (endpoint_pos_a - self.current_position).angle_from_x_axis().radians,
 
-                            range_start: 0.0,
-                            angle: (endpoint_pos_a - current_pos).angle_from_x_axis().radians,
+                        from_id: current_endpoint,
+                        ctrl_id: ctrl_id_a,
+                        to_id: endpoint_id_a,
 
-                            from_id: current_endpoint,
-                            ctrl_id: ctrl_id_a,
-                            to_id: endpoint_id_a,
+                        upper_vertex: vertex_id,
 
-                            upper_vertex: vertex_id,
-
-                            winding: 1,
-                        });
-                    }
-
-                    if after_b {
-                        edges_above += 1;
-                    } else {
-                        let ctrl_id_b = path.segment_ctrl(segment_id_b);
-                        self.edges_below.push(PendingEdge {
-                            from: current_pos,
-                            ctrl: path.ctrl_point(ctrl_id_b),
-                            to: endpoint_pos_b,
-
-                            range_start: 0.0,
-                            angle: (endpoint_pos_b - current_pos).angle_from_x_axis().radians,
-
-                            from_id: current_endpoint,
-                            ctrl_id: ctrl_id_b,
-                            to_id: endpoint_id_b,
-
-                            upper_vertex: vertex_id,
-
-                            winding: -1,
-                        });
-                    }
-
-                    pending_events = true;
+                        winding: 1,
+                    });
                 }
 
-                next_position = Some(current_pos);
-                break;
+                if after_b {
+                    edges_above += 1;
+                } else {
+                    let ctrl_id_b = path.segment_ctrl(segment_id_b);
+                    self.edges_below.push(PendingEdge {
+                        from: self.current_position,
+                        ctrl: path.ctrl_point(ctrl_id_b),
+                        to: endpoint_pos_b,
+
+                        range_start: 0.0,
+                        angle: (endpoint_pos_b - self.current_position).angle_from_x_axis().radians,
+
+                        from_id: current_endpoint,
+                        ctrl_id: ctrl_id_b,
+                        to_id: endpoint_id_b,
+
+                        upper_vertex: vertex_id,
+
+                        winding: -1,
+                    });
+                }
+
+                current_sibling = events.next_sibling_id(current_sibling);
             }
 
-            if pending_events {
-                self.process_events(
-                    vertex_id,
-                    current_endpoint,
-                    edges_above,
-                    output,
-                );
-            }
+            self.process_events(
+                vertex_id,
+                current_endpoint,
+                edges_above,
+                output,
+            );
 
-            if let Some(position) = next_position {
-                self.current_position = position;
-            } else {
-                return;
-            }
+            current_event = events.next_id(current_event);
         }
     }
 
@@ -1221,6 +1206,273 @@ fn compare_positions(a: Point, b: Point) -> Ordering {
 #[inline]
 fn is_after(a: Point, b: Point) -> bool {
     a.y > b.y || (a.y == b.y && a.x > b.x)
+}
+
+pub struct TraversalEvent {
+    next_sibling: usize,
+    next_event: usize,
+    position: Point,
+}
+
+pub struct Traversal {
+    events: Vec<TraversalEvent>,
+    path_data: Vec<(EndpointId, SegmentId)>,
+    first: usize,
+    sorted: bool,
+}
+
+use std::usize;
+
+impl Traversal {
+    pub fn new() -> Self {
+        Traversal {
+            events: Vec::new(),
+            path_data: Vec::new(),
+            first: 0,
+            sorted: false,
+        }
+    }
+
+    pub fn reserve(&mut self, n: usize) {
+        self.events.reserve(n);
+        self.path_data.reserve(n);
+    }
+
+    pub fn push(&mut self, position: Point, endpoint: EndpointId, segment: SegmentId) {
+        let next_event = self.events.len() + 1;
+        self.events.push(TraversalEvent {
+            position,
+            next_sibling: usize::MAX,
+            next_event,
+        });
+        self.path_data.push((endpoint, segment));
+        self.sorted = false;
+    }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+        self.path_data.clear();
+        self.first = 0;
+        self.sorted = false;
+    }
+
+    pub fn first_id(&self) -> usize { self.first }
+
+    pub fn next_id(&self, id: usize) -> usize { self.events[id].next_event }
+
+    pub fn next_sibling_id(&self, id: usize) -> usize { self.events[id].next_sibling }
+
+    pub fn valid_id(&self, id: usize) -> bool { id < self.events.len() }
+
+    pub fn endpoint(&self, id: usize) -> EndpointId { self.path_data[id].0 }
+
+    pub fn segment(&self, id: usize) -> SegmentId { self.path_data[id].1 }
+
+    pub fn position(&self, id: usize) -> Point { self.events[id].position }
+
+    pub fn sort(&mut self) {
+        // This is more or less a bubble-sort, the main difference being that elements with the same
+        // position are grouped in a "sibling" linked list.
+
+        if self.sorted {
+            return;
+        }
+        self.sorted = true;
+
+        if self.events.len() <= 1 {
+            return;
+        }
+
+        let mut current = 0;
+        let mut prev = 0;
+        let mut last = self.events.len() - 1;
+        let mut swapped = false;
+
+        #[cfg(test)]
+        let mut iter_count = self.events.len() * self.events.len();
+
+        loop {
+            #[cfg(test)] {
+                assert!(iter_count > 0);
+                iter_count -= 1;
+            }
+
+            let rewind = current == last ||
+                !self.valid_id(current) ||
+                !self.valid_id(self.next_id(current));
+
+            if rewind {
+                last = prev;
+                prev = self.first;
+                current = self.first;
+                if !swapped || last == self.first {
+                    return;
+                }
+                swapped = false;
+            }
+
+            let next = self.next_id(current);
+            let a = self.events[current].position;
+            let b = self.events[next].position;
+            match compare_positions(a, b) {
+                Ordering::Less => {
+                    // Already ordered.
+                    prev = current;
+                    current = next;
+                }
+                Ordering::Greater => {
+                    // Need to swap current and next.
+                    if prev != current && prev != next {
+                        self.events[prev].next_event = next;
+                    }
+                    if current == self.first {
+                        self.first = next;
+                    }
+                    if next == last {
+                        last = current;
+                    }
+                    let next_next = self.next_id(next);
+                    self.events[current].next_event = next_next;
+                    self.events[next].next_event = current;
+                    swapped = true;
+                    prev = next;
+                }
+                Ordering::Equal => {
+                    // Append next to current's sibling list.
+                    let next_next = self.next_id(next);
+                    self.events[current].next_event = next_next;
+                    let mut current_sibling = current;
+                    let mut next_sibling = self.next_sibling_id(current);
+                    while self.valid_id(next_sibling) {
+                        current_sibling = next_sibling;
+                        next_sibling = self.next_sibling_id(current_sibling);
+                    }
+                    self.events[current_sibling].next_sibling = next;                    
+                }
+            }
+        }
+    }
+
+    fn log(&self) {
+        let mut iter_count = self.events.len() * self.events.len();
+
+        println!("--");
+        let mut current = self.first;
+        while current < self.events.len() {
+            assert!(iter_count > 0);
+            iter_count -= 1;
+
+            print!("[");
+            let mut current_sibling = current;
+            while current_sibling < self.events.len() {
+                print!("{:?},", self.events[current_sibling].position);
+                current_sibling = self.events[current_sibling].next_sibling;
+            }
+            print!("]  ");
+            current = self.events[current].next_event;
+        }
+        println!("\n--");
+    }
+
+    fn assert_sorted(&self) {
+        let mut current = self.first;
+        let mut pos = point(f32::MIN, f32::MIN);
+        while self.valid_id(current) {
+            assert!(is_after(self.events[current].position, pos));
+            pos = self.events[current].position;
+            let mut current_sibling = current;
+            while self.valid_id(current_sibling) {
+                assert_eq!(self.events[current_sibling].position, pos);
+                current_sibling = self.next_sibling_id(current_sibling);
+            }
+            current = self.next_id(current);
+        }
+    }
+}
+
+#[test]
+fn test_traversal_sort_1() {
+    let e = EndpointId::INVALID;
+    let s = SegmentId::INVALID;
+    let mut tx = Traversal::new();
+    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(4.0, 0.0), e, s);
+    tx.push(point(2.0, 0.0), e, s);
+    tx.push(point(3.0, 0.0), e, s);
+    tx.push(point(4.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(6.0, 0.0), e, s);
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_sort_2() {
+    let e = EndpointId::INVALID;
+    let s = SegmentId::INVALID;
+    let mut tx = Traversal::new();
+    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0), e, s);
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_sort_3() {
+    let e = EndpointId::INVALID;
+    let s = SegmentId::INVALID;
+    let mut tx = Traversal::new();
+    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(1.0, 0.0), e, s);
+    tx.push(point(2.0, 0.0), e, s);
+    tx.push(point(3.0, 0.0), e, s);
+    tx.push(point(4.0, 0.0), e, s);
+    tx.push(point(5.0, 0.0), e, s);
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_sort_4() {
+    let e = EndpointId::INVALID;
+    let s = SegmentId::INVALID;
+    let mut tx = Traversal::new();
+    tx.push(point(5.0, 0.0), e, s);
+    tx.push(point(4.0, 0.0), e, s);
+    tx.push(point(3.0, 0.0), e, s);
+    tx.push(point(2.0, 0.0), e, s);
+    tx.push(point(1.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0), e, s);
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_sort_5() {
+    let e = EndpointId::INVALID;
+    let s = SegmentId::INVALID;
+    let mut tx = Traversal::new();
+    tx.push(point(5.0, 0.0), e, s);
+    tx.push(point(5.0, 0.0), e, s);
+    tx.push(point(4.0, 0.0), e, s);
+    tx.push(point(4.0, 0.0), e, s);
+    tx.push(point(3.0, 0.0), e, s);
+    tx.push(point(3.0, 0.0), e, s);
+    tx.push(point(2.0, 0.0), e, s);
+    tx.push(point(2.0, 0.0), e, s);
+    tx.push(point(1.0, 0.0), e, s);
+    tx.push(point(1.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0), e, s);
+
+    tx.sort();
+    tx.assert_sorted();
 }
 
 #[cfg(test)]
