@@ -436,9 +436,7 @@ struct ActiveEdge {
 
     winding: i16,
     is_merge: bool,
-}
 
-struct ActiveEdgeAux {
     from_id: EndpointId,
     ctrl_id: CtrlPointId,
     to_id: EndpointId,
@@ -447,7 +445,6 @@ struct ActiveEdgeAux {
 
 struct ActiveEdges {
     edges: Vec<ActiveEdge>,
-    aux: Vec<ActiveEdgeAux>,
 }
 
 type SpanIdx = i32;
@@ -576,7 +573,6 @@ impl FillTessellator {
         FillTessellator {
             active: ActiveEdges {
                 edges: Vec::new(),
-                aux: Vec::new(),
             },
             pending_edges: Vec::new(),
             fill_rule: FillRule::EvenOdd,
@@ -607,8 +603,8 @@ impl FillTessellator {
 
         builder.end_geometry();
 
-        assert!(self.active.edges.is_empty());
-        assert!(self.fill.spans.is_empty());
+        //assert!(self.active.edges.is_empty());
+        //assert!(self.fill.spans.is_empty());
 
         tess_log!(self, "\n ***************** \n");
     }
@@ -737,7 +733,7 @@ impl FillTessellator {
                 //    \./...  <-- active_edge
                 //     x....  <-- current vertex
 
-                let merge_vertex = self.active.aux[i].upper_vertex;
+                let merge_vertex = active_edge.upper_vertex;
                 let merge_position = active_edge.from;
                 self.fill.merge_spans(
                     winding.span_index,
@@ -759,13 +755,7 @@ impl FillTessellator {
                 // since ideally the rest of the loop shouldn't use this edge
                 // and it will get removed after the loop.
 
-                let from_id = self.active.aux[i].from_id;
-                self.active.aux[i] = ActiveEdgeAux {
-                    from_id,
-                    ctrl_id: CtrlPointId::INVALID,
-                    to_id: current_endpoint,
-                    upper_vertex: current_vertex,
-                };
+                let from_id = active_edge.from_id;
                 *active_edge = ActiveEdge {
                     from: merge_position,
                     ctrl: point(f32::NAN, f32::NAN),
@@ -776,6 +766,10 @@ impl FillTessellator {
                     // are we now in the right span, so make sure this edge does
                     // not generate a transition by giving it a winding of zero.
                     winding: 0,
+                    from_id,
+                    ctrl_id: CtrlPointId::INVALID,
+                    to_id: current_endpoint,
+                    upper_vertex: current_vertex,
                 };
             }
 
@@ -929,11 +923,9 @@ impl FillTessellator {
             e.from = e.to;
             e.ctrl = e.to;
             e.winding = 0;
-
-            let aux = &mut self.active.aux[in_idx];
-            aux.from_id = aux.to_id;
-            aux.ctrl_id = CtrlPointId::INVALID;
-            aux.upper_vertex = current_vertex;
+            e.from_id = e.to_id;
+            e.ctrl_id = CtrlPointId::INVALID;
+            e.upper_vertex = current_vertex;
 
         } else if winding.transition == Transition::In && self.pending_edges.len() % 2 == 1 {
             // Left event.
@@ -968,7 +960,7 @@ impl FillTessellator {
             let edge_above = above.start - 1;
 
             let upper_pos = self.active.edges[edge_above].from;
-            let upper_id = self.active.aux[edge_above].upper_vertex;
+            let upper_id = self.active.edges[edge_above].upper_vertex;
 
             if self.active.edges[edge_above].is_merge {
 
@@ -1083,7 +1075,6 @@ impl FillTessellator {
                 rm_index += 1
             } else {
                 self.active.edges.remove(rm_index);
-                self.active.aux.remove(rm_index);
             }
         }
 
@@ -1100,9 +1091,6 @@ impl FillTessellator {
                 range_start: edge.range_start,
                 winding: edge.winding,
                 is_merge: false,
-            });
-
-            self.active.aux.insert(idx, ActiveEdgeAux {
                 from_id: edge.from_id,
                 to_id: edge.to_id,
                 ctrl_id: edge.ctrl_id,

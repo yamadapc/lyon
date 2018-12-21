@@ -429,6 +429,24 @@ fn test_double_merge_with_intersection() {
 }
 
 #[test]
+fn test_intersecting_bow_tie() {
+    // Simple self-intersecting shape.
+    // x  x
+    // |\/|
+    // |/\|
+    // x  x
+    let mut path = Path::builder();
+
+    path.move_to(point(0.0, 0.0));
+    path.line_to(point(2.0, 2.0));
+    path.line_to(point(2.0, 0.0));
+    path.line_to(point(0.0, 2.0));
+    path.close();
+
+    test_path(path.build().as_slice());
+}
+
+#[test]
 fn test_chained_merge_end() {
     // This test creates a succession of merge events that need to be resolved during
     // an end event.
