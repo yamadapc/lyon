@@ -76,11 +76,11 @@ fn test_path_internal(path: PathSlice, expected_triangle_count: Option<usize>) {
         return;
     }
 
-//    ::extra::debugging::find_reduced_test_case(
-//        path,
-//        &|path: Path| { return tessellate_path(path.as_slice(), false).is_err(); },
-//    );
-//
+    ::extra::debugging::find_reduced_test_case(
+        path,
+        &|path: Path| { return tessellate_path(path.as_slice(), false).is_err(); },
+    );
+
     tessellate_path(path, true).unwrap();
     panic!();
 }
