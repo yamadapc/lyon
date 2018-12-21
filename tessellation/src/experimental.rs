@@ -160,8 +160,8 @@ impl Path {
 
         events.sort_by(|a, b| {
             compare_positions(
-                self.endpoints[b.vertex.0 as usize],
                 self.endpoints[a.vertex.0 as usize],
+                self.endpoints[b.vertex.0 as usize],
             )
         });
     }
@@ -379,7 +379,6 @@ pub struct FillTessellator {
     active: ActiveEdges,
     pending_edges: Vec<PendingEdge>,
     fill_rule: FillRule,
-    events: Vec<Event>,
     fill: Spans,
     log: bool,
 
@@ -576,7 +575,6 @@ impl FillTessellator {
             },
             pending_edges: Vec::new(),
             fill_rule: FillRule::EvenOdd,
-            events: Vec::new(),
             fill: Spans {
                 spans: Vec::new(),
             },
@@ -595,11 +593,13 @@ impl FillTessellator {
     ) {
         self.fill_rule = options.fill_rule;
 
-        path.sort(&mut self.events);
+        let mut events = Vec::new();
+
+        path.sort(&mut events);
 
         builder.begin_geometry();
 
-        self.tessellator_loop(path, builder);
+        self.tessellator_loop(path, &mut events, builder);
 
         builder.end_geometry();
 
@@ -613,75 +613,105 @@ impl FillTessellator {
         self.log = true;
     }
 
-    fn tessellator_loop(&mut self, path: &Path, output: &mut dyn GeometryBuilder<Vertex>) {
-        while let Some(event) = self.events.pop() {
-            let segment_id_a = event.segment;
-            let current_endpoint = path.segment_from(segment_id_a);
-            let segment_id_b = path.previous_segment(segment_id_a);
-            let endpoint_id_b = path.segment_from(segment_id_b);
-            let endpoint_id_a = path.segment_to(segment_id_a);
-
-            let endpoint_pos_a = path.endpoint(endpoint_id_a);
-            let endpoint_pos_b = path.endpoint(endpoint_id_b);
-            let current_pos = path.endpoint(current_endpoint);
-
-            let after_a = is_after(current_pos, endpoint_pos_a);
-            let after_b = is_after(current_pos, endpoint_pos_b);
-
+    fn tessellator_loop(
+        &mut self,
+        path: &Path,
+        events: &mut Vec<Event>,
+        output: &mut dyn GeometryBuilder<Vertex>
+    ) {
+        let mut events = events.iter();
+        let mut current_position = point(f32::MIN, f32::MIN);
+        let mut next_event = events.next();
+        loop {
+            let mut pending_events = false;
+            let mut next_position = None;
             let mut edges_above = 0;
-            let vertex_id = output.add_vertex(current_pos);
+            let mut vertex_id = VertexId::INVALID;
+            let mut current_endpoint = EndpointId::INVALID;
+            while let Some(event) = next_event {
+                let segment_id_a = event.segment;
+                current_endpoint = path.segment_from(segment_id_a);
+                let current_pos = path.endpoint(current_endpoint);
+                println!("event at {:?}", current_pos);
+                if current_pos == current_position {
+                    next_event = events.next();
 
-            if after_a {
-                edges_above += 1;
-            } else {
-                let ctrl_id_a = path.segment_ctrl(segment_id_a);
-                self.pending_edges.push(PendingEdge {
-                    from: current_pos,
-                    ctrl: path.ctrl_point(ctrl_id_a),
-                    to: endpoint_pos_a,
+                    let segment_id_b = path.previous_segment(segment_id_a);
+                    let endpoint_id_b = path.segment_from(segment_id_b);
+                    let endpoint_id_a = path.segment_to(segment_id_a);
+                    let endpoint_pos_a = path.endpoint(endpoint_id_a);
+                    let endpoint_pos_b = path.endpoint(endpoint_id_b);
+                    let after_a = is_after(current_pos, endpoint_pos_a);
+                    let after_b = is_after(current_pos, endpoint_pos_b);
 
-                    range_start: 0.0,
-                    angle: (endpoint_pos_a - current_pos).angle_from_x_axis().radians,
+                    vertex_id = output.add_vertex(current_pos);
 
-                    from_id: current_endpoint,
-                    ctrl_id: ctrl_id_a,
-                    to_id: endpoint_id_a,
+                    if after_a {
+                        edges_above += 1;
+                    } else {
+                        let ctrl_id_a = path.segment_ctrl(segment_id_a);
+                        self.pending_edges.push(PendingEdge {
+                            from: current_pos,
+                            ctrl: path.ctrl_point(ctrl_id_a),
+                            to: endpoint_pos_a,
 
-                    upper_vertex: vertex_id,
+                            range_start: 0.0,
+                            angle: (endpoint_pos_a - current_pos).angle_from_x_axis().radians,
 
-                    winding: 1,
-                });
+                            from_id: current_endpoint,
+                            ctrl_id: ctrl_id_a,
+                            to_id: endpoint_id_a,
+
+                            upper_vertex: vertex_id,
+
+                            winding: 1,
+                        });
+                    }
+
+                    if after_b {
+                        edges_above += 1;
+                    } else {
+                        let ctrl_id_b = path.segment_ctrl(segment_id_b);
+                        self.pending_edges.push(PendingEdge {
+                            from: current_pos,
+                            ctrl: path.ctrl_point(ctrl_id_b),
+                            to: endpoint_pos_b,
+
+                            range_start: 0.0,
+                            angle: (endpoint_pos_b - current_pos).angle_from_x_axis().radians,
+
+                            from_id: current_endpoint,
+                            ctrl_id: ctrl_id_b,
+                            to_id: endpoint_id_b,
+
+                            upper_vertex: vertex_id,
+
+                            winding: -1,
+                        });
+                    }
+
+                    pending_events = true;
+                }
+
+                next_position = Some(current_pos);
+                break;
             }
 
-            if after_b {
-                edges_above += 1;
-            } else {
-                let ctrl_id_b = path.segment_ctrl(segment_id_b);
-                self.pending_edges.push(PendingEdge {
-                    from: current_pos,
-                    ctrl: path.ctrl_point(ctrl_id_b),
-                    to: endpoint_pos_b,
-
-                    range_start: 0.0,
-                    angle: (endpoint_pos_b - current_pos).angle_from_x_axis().radians,
-
-                    from_id: current_endpoint,
-                    ctrl_id: ctrl_id_b,
-                    to_id: endpoint_id_b,
-
-                    upper_vertex: vertex_id,
-
-                    winding: -1,
-                });
+            if pending_events {
+                self.process_events(
+                    current_position,
+                    vertex_id,
+                    current_endpoint,
+                    edges_above,
+                    output,
+                );
             }
 
-            self.process_events(
-                current_pos,
-                vertex_id,
-                current_endpoint,
-                edges_above,
-                output,
-            );
+            if let Some(position) = next_position {
+                current_position = position;
+            } else {
+                return;
+            }
         }
     }
 

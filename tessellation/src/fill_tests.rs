@@ -43,7 +43,11 @@ fn tessellate_path(path: PathSlice, log: bool) -> Result<usize, FillError> {
             }
 
             let mut vertex_builder = simple_builder(&mut buffers);
-            experimental::FillTessellator::new().tessellate_path(
+            let mut tess = experimental::FillTessellator::new();
+            if log {
+                tess.enable_logging();
+            }
+            tess.tessellate_path(
                 &builder.build(),
                 &options,
                 &mut vertex_builder
@@ -950,7 +954,7 @@ fn test_point_on_edge2() {
 }
 
 #[test]
-fn test_coincident_simple() {
+fn test_coincident_simple_1() {
     // 0___5
     //  \ /
     // 1 x 4
