@@ -384,7 +384,6 @@ pub struct FillTessellator {
     active: ActiveEdges,
     edges_below: Vec<PendingEdge>,
     fill_rule: FillRule,
-    events: Vec<Event>,
     fill: Spans,
     log: bool,
 
@@ -601,7 +600,6 @@ impl FillTessellator {
             },
             edges_below: Vec::new(),
             fill_rule: FillRule::EvenOdd,
-            events: Vec::new(),
             fill: Spans {
                 spans: Vec::new(),
             },
@@ -620,11 +618,13 @@ impl FillTessellator {
     ) {
         self.fill_rule = options.fill_rule;
 
-        path.sort(&mut self.events);
+        let mut events = Vec::new();
+
+        path.sort(&mut events);
 
         builder.begin_geometry();
 
-        self.tessellator_loop(path, builder);
+        self.tessellator_loop(path, &mut events, builder);
 
         builder.end_geometry();
 
@@ -638,29 +638,34 @@ impl FillTessellator {
         self.log = true;
     }
 
-    fn tessellator_loop(&mut self, path: &Path, output: &mut dyn GeometryBuilder<Vertex>) {
+    fn tessellator_loop(
+        &mut self,
+        path: &Path,
+        events: &mut Vec<Event>,
+        output: &mut dyn GeometryBuilder<Vertex>
+    ) {
+        let mut events = events.iter();
+        let mut next_event = events.next();
         self.current_position = point(f32::MIN, f32::MIN);
-        let events = mem::replace(&mut self.events, Vec::new());
-        let mut event_iter = events.iter();
-        let mut next_event = event_iter.next();
         loop {
-            let mut edges_above = 0;
+            let mut pending_events = false;
             let mut next_position = None;
-            let mut current_endpoint = EndpointId(u16::MAX);
-            let mut vertex_id = VertexId(u32::MAX);
+            let mut edges_above = 0;
+            let mut vertex_id = VertexId::INVALID;
+            let mut current_endpoint = EndpointId::INVALID;
             while let Some(event) = next_event {
                 let segment_id_a = event.segment;
                 current_endpoint = path.segment_from(segment_id_a);
                 let current_pos = path.endpoint(current_endpoint);
+                println!("event at {:?}", current_pos);
                 if current_pos == self.current_position {
-                    next_event = event_iter.next();
+                    next_event = events.next();
+
                     let segment_id_b = path.previous_segment(segment_id_a);
                     let endpoint_id_b = path.segment_from(segment_id_b);
                     let endpoint_id_a = path.segment_to(segment_id_a);
-
                     let endpoint_pos_a = path.endpoint(endpoint_id_a);
                     let endpoint_pos_b = path.endpoint(endpoint_id_b);
-
                     let after_a = is_after(current_pos, endpoint_pos_a);
                     let after_b = is_after(current_pos, endpoint_pos_b);
 
@@ -709,13 +714,15 @@ impl FillTessellator {
                             winding: -1,
                         });
                     }
-                } else {
-                    next_position = Some(current_pos);
-                    break;
+
+                    pending_events = true;
                 }
+
+                next_position = Some(current_pos);
+                break;
             }
 
-            if edges_above > 0 || self.edges_below.len() > 0 {
+            if pending_events {
                 self.process_events(
                     vertex_id,
                     current_endpoint,
@@ -727,7 +734,7 @@ impl FillTessellator {
             if let Some(position) = next_position {
                 self.current_position = position;
             } else {
-                break;
+                return;
             }
         }
     }
