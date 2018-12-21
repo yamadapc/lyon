@@ -584,7 +584,7 @@ impl FillTessellator {
             fill: Spans {
                 spans: Vec::new(),
             },
-            log: true,
+            log: false,
 
             #[cfg(feature="debugger")]
             debugger: None,
