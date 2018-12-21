@@ -1223,6 +1223,240 @@ fn is_after(a: Point, b: Point) -> bool {
     a.y > b.y || (a.y == b.y && a.x > b.x)
 }
 
+pub struct TraversalEvent {
+    prev_edge: SegmentId,
+    next_edge: SegmentId,
+    next_sibbling: usize,
+    next_event: usize,
+    position: Point,
+}
+
+pub struct Traversal {
+    events: Vec<TraversalEvent>,
+    first: usize,
+    sorted: bool,
+}
+
+use std::usize;
+
+impl Traversal {
+    pub fn new() -> Self {
+        Traversal {
+            events: Vec::new(),
+            first: 0,
+            sorted: false,
+        }
+    }
+
+    pub fn push(&mut self, mut evt: TraversalEvent) {
+        evt.next_event = self.events.len() + 1;
+        evt.next_sibbling = usize::MAX;
+        self.events.push(evt);
+        self.sorted = false;
+    }
+
+    pub fn sort(&mut self) {
+        // This is more or less a bubble-sort, the main difference being that elements with the same
+        // position are grouped in a "sibbling" linked list.
+
+        if self.sorted {
+            return;
+        }
+        self.sorted = true;
+
+        let mut current = 0;
+        let mut prev = 0;
+        let mut last = self.events.len() - 1;
+        let mut swapped = false;
+
+        #[cfg(test)]
+        let mut iter_count = self.events.len() * self.events.len();
+
+        loop {
+            #[cfg(test)] {
+                assert!(iter_count > 0);
+                iter_count -= 1;                
+            }
+
+            let rewind = current == last ||
+                current >= self.events.len() ||
+                self.events[current].next_event >= self.events.len();
+
+            if rewind {
+                last = prev;
+                prev = self.first;
+                current = self.first;
+                if !swapped || last == self.first {
+                    return;
+                }
+                swapped = false;
+            }
+
+            let next = self.events[current].next_event;
+            let a = self.events[current].position;
+            let b = self.events[next].position;
+            match compare_positions(a, b) {
+                Ordering::Less => {
+                    // Already ordered.
+                    prev = current;
+                    current = next;
+                }
+                Ordering::Greater => {
+                    // Need to swap current and next.
+                    if prev != current && prev != next {
+                        self.events[prev].next_event = next;
+                    }
+                    if current == self.first {
+                        self.first = next;
+                    }
+                    if next == last {
+                        last = current;
+                    }
+                    let next_next = self.events[next].next_event;
+                    self.events[current].next_event = next_next;
+                    self.events[next].next_event = current;
+                    swapped = true;
+                    prev = next;                    
+                }
+                Ordering::Equal => {
+                    // Append next to current's sibbling list.
+                    let next_next = self.events[next].next_event;
+                    self.events[current].next_event = next_next;
+                    let mut current_sibbling = current;
+                    let mut next_sibbling = self.events[current].next_sibbling;
+                    while next_sibbling < self.events.len() {
+                        current_sibbling = next_sibbling;
+                        next_sibbling = self.events[next_sibbling].next_sibbling;
+                    }
+                    self.events[current_sibbling].next_sibbling = next;                    
+                }
+            }
+        }
+    }
+
+    fn log(&self) {
+        let mut iter_count = self.events.len() * self.events.len();
+
+        println!("--");
+        let mut current = self.first;
+        while current < self.events.len() {
+            assert!(iter_count > 0);
+            iter_count -= 1;
+
+            print!("[");
+            let mut current_sibbling = current;
+            while current_sibbling < self.events.len() {
+                print!("{:?},", self.events[current_sibbling].position);
+                current_sibbling = self.events[current_sibbling].next_sibbling;
+            }
+            print!("]  ");
+            current = self.events[current].next_event;
+        }
+        println!("\n--");
+    }
+
+    fn assert_sorted(&self) {
+        let mut current = self.first;
+        let mut pos = point(f32::MIN, f32::MIN);
+        while current < self.events.len() {
+            assert!(is_after(self.events[current].position, pos));
+            pos = self.events[current].position;
+            let mut current_sibbling = current;
+            while current_sibbling < self.events.len() {
+                assert_eq!(self.events[current_sibbling].position, pos);
+                current_sibbling = self.events[current_sibbling].next_sibbling;
+            }
+            current = self.events[current].next_event;
+        }
+    }
+}
+
+#[cfg(test)]
+fn evt(x: f32, y: f32) -> TraversalEvent {
+    TraversalEvent {
+        position: point(x, y),
+        next_sibbling: usize::MAX,
+        next_event: usize::MAX,
+        prev_edge: SegmentId::INVALID,
+        next_edge: SegmentId::INVALID,
+    }
+}
+
+#[test]
+fn test_traversal_sort_1() {
+    let mut tx = Traversal::new();
+    tx.push(evt(0.0, 0.0));
+    tx.push(evt(4.0, 0.0));
+    tx.push(evt(2.0, 0.0));
+    tx.push(evt(3.0, 0.0));
+    tx.push(evt(4.0, 0.0));
+    tx.push(evt(0.0, 0.0));
+    tx.push(evt(6.0, 0.0));
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_sort_2() {
+    let mut tx = Traversal::new();
+    tx.push(evt(0.0, 0.0));
+    tx.push(evt(0.0, 0.0));
+    tx.push(evt(0.0, 0.0));
+    tx.push(evt(0.0, 0.0));
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_sort_3() {
+    let mut tx = Traversal::new();
+    tx.push(evt(0.0, 0.0));
+    tx.push(evt(1.0, 0.0));
+    tx.push(evt(2.0, 0.0));
+    tx.push(evt(3.0, 0.0));
+    tx.push(evt(4.0, 0.0));
+    tx.push(evt(5.0, 0.0));
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_sort_4() {
+    let mut tx = Traversal::new();
+    tx.push(evt(5.0, 0.0));
+    tx.push(evt(4.0, 0.0));
+    tx.push(evt(3.0, 0.0));
+    tx.push(evt(2.0, 0.0));
+    tx.push(evt(1.0, 0.0));
+    tx.push(evt(0.0, 0.0));
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_sort_5() {
+    let mut tx = Traversal::new();
+    tx.push(evt(5.0, 0.0));
+    tx.push(evt(5.0, 0.0));
+    tx.push(evt(4.0, 0.0));
+    tx.push(evt(4.0, 0.0));
+    tx.push(evt(3.0, 0.0));
+    tx.push(evt(3.0, 0.0));
+    tx.push(evt(2.0, 0.0));
+    tx.push(evt(2.0, 0.0));
+    tx.push(evt(1.0, 0.0));
+    tx.push(evt(1.0, 0.0));
+    tx.push(evt(0.0, 0.0));
+    tx.push(evt(0.0, 0.0));
+
+    tx.sort();
+    tx.assert_sorted();
+}
+
 #[cfg(test)]
 use geometry_builder::{VertexBuffers, simple_builder};
 
