@@ -398,7 +398,27 @@ fn test_rust_logo_scale_down2() {
 }
 
 #[test]
-fn test_double_merge() {
+fn test_simple_double_merge() {
+    // This test triggers the code path where a merge event is resolved during another
+    // merge event.
+    //     / \ /
+    //  \ / .-x    <-- merge vertex
+    //   x-'      <-- current merge vertex
+    let mut path = Path::builder();
+
+    path.move_to(point(0.0, 2.0));
+    path.line_to(point(1.0, 3.0));
+    path.line_to(point(2.0, 0.0));
+    path.line_to(point(3.0, 2.0));
+    path.line_to(point(4.0, 1.0));
+    path.line_to(point(2.0, 6.0));
+    path.close();
+
+    // "M 0 2 L 1 3 L 2 0 L 3 2 L 4 1 L 2 6 Z"
+}
+
+#[test]
+fn test_double_merge_with_intersection() {
     // This test triggers the code path where a merge event is resolved during another
     // merge event.
     //     / \ /
