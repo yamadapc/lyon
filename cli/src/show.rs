@@ -126,6 +126,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
                     let dbg_receiver = render_options.debugger.map(|flags| {
                         let (dbg_tx, dbg_rx) = debugger_channel();
                         tess.install_debugger(Box::new(Filter::new(flags, dbg_tx)));
+                        tess.enable_logging();
                         dbg_rx
                     });
 
