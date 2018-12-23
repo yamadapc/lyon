@@ -777,7 +777,7 @@ impl FillTessellator {
                     range_start: 0.0,
                     to: current_pos,
                     is_merge: false,
-                    // We enterred the left span (which we just removed), and
+                    // We entered the left span (which we just removed), and
                     // are we now in the right span, so make sure this edge does
                     // not generate a transition by giving it a winding of zero.
                     winding: 0,
@@ -1245,7 +1245,7 @@ impl Traversal {
         loop {
             #[cfg(test)] {
                 assert!(iter_count > 0);
-                iter_count -= 1;                
+                iter_count -= 1;
             }
 
             let rewind = current == last ||
@@ -1286,7 +1286,7 @@ impl Traversal {
                     self.events[current].next_event = next_next;
                     self.events[next].next_event = current;
                     swapped = true;
-                    prev = next;                    
+                    prev = next;
                 }
                 Ordering::Equal => {
                     // Append next to current's sibbling list.
