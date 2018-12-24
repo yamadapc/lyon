@@ -957,7 +957,7 @@ impl FillTessellator {
             e.upper_vertex = current_vertex;
         }
 
-        // The range pf pending edges below the current vertex to look at in the
+        // The range of pending edges below the current vertex to look at in the
         // last loop (not always the full range if we process split events).
         let mut below = 0..self.edges_below.len();
 
