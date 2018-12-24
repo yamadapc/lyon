@@ -655,9 +655,9 @@ impl FillTessellator {
             let current_endpoint = events.endpoint(current_event);
             let vertex_id = output.add_vertex(self.current_position);
 
-            let mut current_sibbling = current_event;
-            while events.valid_id(current_sibbling) {
-                let segment_id_a = events.segment(current_sibbling);
+            let mut current_sibling = current_event;
+            while events.valid_id(current_sibling) {
+                let segment_id_a = events.segment(current_sibling);
                 let segment_id_b = path.previous_segment(segment_id_a);
                 let endpoint_id_b = path.segment_from(segment_id_b);
                 let endpoint_id_a = path.segment_to(segment_id_a);
@@ -710,7 +710,7 @@ impl FillTessellator {
                     });
                 }
 
-                current_sibbling = events.next_sibbling_id(current_sibbling);
+                current_sibling = events.next_sibling_id(current_sibling);
             }
 
             self.process_events(
@@ -1209,7 +1209,7 @@ fn is_after(a: Point, b: Point) -> bool {
 }
 
 pub struct TraversalEvent {
-    next_sibbling: usize,
+    next_sibling: usize,
     next_event: usize,
     position: Point,
 }
@@ -1242,7 +1242,7 @@ impl Traversal {
         let next_event = self.events.len() + 1;
         self.events.push(TraversalEvent {
             position,
-            next_sibbling: usize::MAX,
+            next_sibling: usize::MAX,
             next_event,
         });
         self.path_data.push((endpoint, segment));
@@ -1260,7 +1260,7 @@ impl Traversal {
 
     pub fn next_id(&self, id: usize) -> usize { self.events[id].next_event }
 
-    pub fn next_sibbling_id(&self, id: usize) -> usize { self.events[id].next_sibbling }
+    pub fn next_sibling_id(&self, id: usize) -> usize { self.events[id].next_sibling }
 
     pub fn valid_id(&self, id: usize) -> bool { id < self.events.len() }
 
@@ -1272,7 +1272,7 @@ impl Traversal {
 
     pub fn sort(&mut self) {
         // This is more or less a bubble-sort, the main difference being that elements with the same
-        // position are grouped in a "sibbling" linked list.
+        // position are grouped in a "sibling" linked list.
 
         if self.sorted {
             return;
@@ -1338,16 +1338,16 @@ impl Traversal {
                     prev = next;
                 }
                 Ordering::Equal => {
-                    // Append next to current's sibbling list.
+                    // Append next to current's sibling list.
                     let next_next = self.next_id(next);
                     self.events[current].next_event = next_next;
-                    let mut current_sibbling = current;
-                    let mut next_sibbling = self.next_sibbling_id(current);
-                    while self.valid_id(next_sibbling) {
-                        current_sibbling = next_sibbling;
-                        next_sibbling = self.next_sibbling_id(current_sibbling);
+                    let mut current_sibling = current;
+                    let mut next_sibling = self.next_sibling_id(current);
+                    while self.valid_id(next_sibling) {
+                        current_sibling = next_sibling;
+                        next_sibling = self.next_sibling_id(current_sibling);
                     }
-                    self.events[current_sibbling].next_sibbling = next;                    
+                    self.events[current_sibling].next_sibling = next;                    
                 }
             }
         }
@@ -1363,10 +1363,10 @@ impl Traversal {
             iter_count -= 1;
 
             print!("[");
-            let mut current_sibbling = current;
-            while current_sibbling < self.events.len() {
-                print!("{:?},", self.events[current_sibbling].position);
-                current_sibbling = self.events[current_sibbling].next_sibbling;
+            let mut current_sibling = current;
+            while current_sibling < self.events.len() {
+                print!("{:?},", self.events[current_sibling].position);
+                current_sibling = self.events[current_sibling].next_sibling;
             }
             print!("]  ");
             current = self.events[current].next_event;
@@ -1380,10 +1380,10 @@ impl Traversal {
         while self.valid_id(current) {
             assert!(is_after(self.events[current].position, pos));
             pos = self.events[current].position;
-            let mut current_sibbling = current;
-            while self.valid_id(current_sibbling) {
-                assert_eq!(self.events[current_sibbling].position, pos);
-                current_sibbling = self.next_sibbling_id(current_sibbling);
+            let mut current_sibling = current;
+            while self.valid_id(current_sibling) {
+                assert_eq!(self.events[current_sibling].position, pos);
+                current_sibling = self.next_sibling_id(current_sibling);
             }
             current = self.next_id(current);
         }
