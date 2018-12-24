@@ -1279,6 +1279,10 @@ impl Traversal {
         }
         self.sorted = true;
 
+        if self.events.len() <= 1 {
+            return;
+        }
+
         let mut current = 0;
         let mut prev = 0;
         let mut last = self.events.len() - 1;
