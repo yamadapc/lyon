@@ -1290,7 +1290,7 @@ impl Traversal {
         loop {
             #[cfg(test)] {
                 assert!(iter_count > 0);
-                iter_count -= 1;                
+                iter_count -= 1;
             }
 
             let rewind = current == last ||
@@ -1331,7 +1331,7 @@ impl Traversal {
                     self.events[current].next_event = next_next;
                     self.events[next].next_event = current;
                     swapped = true;
-                    prev = next;                    
+                    prev = next;
                 }
                 Ordering::Equal => {
                     // Append next to current's sibbling list.
