@@ -40,7 +40,7 @@ fn tessellate_path(path: PathSlice, log: bool) -> Result<usize, FillError> {
             use path::builder::*;
             use path::iterator::*;
 
-            let mut builder = experimental::Path::builder();
+            let mut builder = Path::builder();
             for e in path.path_iter().flattened(0.05) {
                 builder.flat_event(e);
             }

@@ -116,7 +116,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
 
                     println!(" -- running the experimental tessellator.");
 
-                    let mut builder = experimental::Path::builder();
+                    let mut builder = Path::builder();
                     for e in cmd.path.path_iter().flattened(options.tolerance) {
                         println!("{:?}", e);
                         builder.flat_event(e);
@@ -137,6 +137,16 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
                     );
                     if let Some(dbg) = dbg_receiver {
                         dbg.write_trace(&mut debug_trace);
+                    }
+                    for (i, v) in geometry.vertices.iter().enumerate() {
+                        println!("{}: {:?}", i, v.position);
+                    }
+                    for i in 0..(geometry.indices.len() / 3) {
+                        println!("{}/{}/{}",
+                            geometry.indices[i*3],
+                            geometry.indices[i*3+1],
+                            geometry.indices[i*3+2],
+                        );
                     }
                 }
             }

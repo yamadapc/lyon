@@ -28,7 +28,7 @@ pub enum Verb {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
 pub struct Cursor {
-    vertex: VertexId,
+    pub vertex: VertexId,
     verb: u32,
 }
 
@@ -112,7 +112,7 @@ impl Path {
         prev_cursor(&cursor, &self.verbs)
     }
 
-    pub fn cursor(&self) -> Cursor {
+    pub fn start(&self) -> Cursor {
         Cursor {
             vertex: VertexId(0),
             verb: 0,
@@ -123,6 +123,10 @@ impl Path {
     pub fn cursor_is_valid(&self, cursor: Cursor) -> bool {
         (cursor.verb as usize) < self.verbs.len()
             && cursor.vertex.to_usize() + n_stored_points(self.verbs[cursor.verb as usize]) as usize <= self.points.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.verbs.is_empty()
     }
 }
 
@@ -199,6 +203,22 @@ impl<'l> PathSlice<'l> {
         prev_cursor(&cursor, self.verbs)
     }
 
+    pub fn start(&self) -> Cursor {
+        Cursor {
+            vertex: VertexId(0),
+            verb: 0,
+        }
+    }
+
+    /// Returns whether this cursor points inside the storage of this path.
+    pub fn cursor_is_valid(&self, cursor: Cursor) -> bool {
+        (cursor.verb as usize) < self.verbs.len()
+            && cursor.vertex.to_usize() + n_stored_points(self.verbs[cursor.verb as usize]) as usize <= self.points.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.verbs.is_empty()
+    }
 }
 
 //impl<'l> IntoIterator for PathSlice<'l> {
@@ -420,7 +440,7 @@ fn n_stored_points(verb: Verb) -> u32 {
 }
 
 fn next_cursor(cursor: &Cursor, verbs: &[Verb]) -> Option<Cursor> {
-    if cursor.verb as usize >= verbs.len() {
+    if cursor.verb as usize >= verbs.len() - 1 {
         return None;
     }
     let verb = verbs[cursor.verb as usize];

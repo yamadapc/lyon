@@ -9,8 +9,11 @@ use geometry_builder::{GeometryBuilder, VertexId};
 use std::ops::Range;
 use path_fill::MonotoneTessellator;
 use path::builder::*;
+use path::PathEvent;
+use path::default::{Path, PathSlice};
 use std::{u16, u32, f32};
 use std::env;
+use std::mem::swap;
 
 #[cfg(feature="debugger")]
 use debugger::*;
@@ -30,357 +33,6 @@ macro_rules! tess_log {
             println!($fmt, $($arg)*);
         }
     );
-}
-
-macro_rules! impl_id {
-    ($Name:ident) => (
-        #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-        pub struct $Name(pub u16);
-
-        impl $Name {
-            pub const INVALID: Self = $Name(u16::MAX);
-            pub fn is_valid(self) -> bool { self != Self::INVALID }
-            pub fn to_usize(self) -> usize { self.0 as usize }
-            pub fn from_usize(idx: usize) -> Self { $Name(idx as u16) }
-        }
-    )
-}
-
-impl_id!(CtrlPointId);
-impl_id!(EndpointId);
-impl_id!(SegmentId);
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct Segment {
-    from: EndpointId,
-    to: EndpointId,
-    ctrl: CtrlPointId,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SubPathInfo {
-    range: Range<usize>,
-    is_closed: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct Path {
-    endpoints: Vec<Point>,
-    ctrl_points: Vec<Point>,
-    segments: Vec<Segment>,
-    sub_paths: Vec<SubPathInfo>,
-}
-
-impl Path {
-    pub fn new() -> Self {
-        Path {
-            endpoints: Vec::new(),
-            ctrl_points: Vec::new(),
-            segments: Vec::new(),
-            sub_paths: vec![
-                SubPathInfo {
-                    range: 0..0,
-                    is_closed: true,
-                }
-            ],
-        }
-    }
-
-    pub fn builder() -> Builder {
-        Builder::new()
-    }
-
-    fn previous_segment(&self, id: SegmentId) -> SegmentId {
-        let idx = id.0 as usize;
-        for sp in &self.sub_paths {
-            if sp.range.start > idx || sp.range.end <= idx {
-                continue;
-            }
-
-            return SegmentId::from_usize(
-                if idx == sp.range.start { sp.range.end - 1 } else { idx - 1 }
-            );
-        }
-
-        SegmentId::INVALID
-    }
-
-    fn next_segment(&self, id: SegmentId) -> SegmentId {
-        let idx = id.0 as usize;
-        for sp in &self.sub_paths {
-            if sp.range.start > idx || sp.range.end <= idx {
-                continue;
-            }
-
-            return SegmentId::from_usize(
-                if idx == sp.range.end - 1 { sp.range.start } else { idx + 1 }
-            );
-        }
-
-        SegmentId::INVALID
-    }
-
-    fn segment_from(&self, id: SegmentId) -> EndpointId {
-        self.segments[id.to_usize()].from
-    }
-
-    fn segment_ctrl(&self, id: SegmentId) -> CtrlPointId {
-        self.segments[id.to_usize()].ctrl
-    }
-
-    fn segment_to(&self, id: SegmentId) -> EndpointId {
-        let id = self.next_segment(id);
-        self.segments[id.to_usize()].from
-    }
-
-    fn endpoint(&self, id: EndpointId) -> Point {
-        if id.is_valid() {
-            return self.endpoints[id.0 as usize];
-        }
-
-        point(f32::NAN, f32::NAN)
-    }
-
-    fn ctrl_point(&self, id: CtrlPointId) -> Point {
-        if id.is_valid() {
-            return self.ctrl_points[id.0 as usize];
-        }
-
-        point(f32::NAN, f32::NAN)
-    }
-
-
-    fn sort(&self, events: &mut Traversal) {
-        let mut alloc_size = 0;
-        for sub_path in &self.sub_paths {
-            alloc_size += sub_path.range.end - sub_path.range.start;
-        }
-
-        events.reserve(alloc_size);
-
-        for sub_path in &self.sub_paths {
-            if sub_path.range.end - sub_path.range.start < 2 {
-                continue;
-            }
-            for i in sub_path.range.clone() {
-                let endpoint = self.segments[i].from;
-                events.push(
-                    self.endpoint(endpoint),
-                    endpoint,
-                    SegmentId::from_usize(i),
-                );
-            }
-        }
-
-        events.sort();
-    }
-}
-
-struct Event {
-    vertex: EndpointId,
-    segment: SegmentId,
-}
-
-pub struct Builder {
-    path: Path,
-    tolerance: f32,
-    in_sub_path: bool,
-}
-
-impl Builder {
-    pub fn new() -> Self {
-        Builder::with_tolerance(FillOptions::DEFAULT_TOLERANCE)
-    }
-
-    pub fn with_tolerance(tolerance: f32) -> Self {
-        Builder {
-            path: Path::new(),
-            tolerance,
-            in_sub_path: false,
-        }
-    }
-
-    pub fn line_to(&mut self, to_pos: Point) -> bool {
-        if self.path.endpoints.is_empty() {
-            self.path.endpoints.push(point(0.0, 0.0));
-        }
-
-        if self.segment_is_too_small(&to_pos) {
-            return false;
-        }
-
-        self.in_sub_path = true;
-        let from = EndpointId((self.path.endpoints.len() - 1) as u16);
-        let ctrl = CtrlPointId::INVALID;
-        let to = EndpointId(from.0 + 1);
-
-        self.path.endpoints.push(to_pos);
-
-        self.path.segments.push(Segment { from, ctrl, to });
-
-        true
-    }
-
-    pub fn move_to(&mut self, to_pos: Point) {
-        self.end_sub_path(false);
-        self.path.endpoints.push(to_pos);
-    }
-
-    pub fn close(&mut self) {
-        self.end_sub_path(true);
-    }
-
-    pub fn quadratic_bezier_to(&mut self, ctrl_pos: Point, to_pos: Point) {
-        if self.path.endpoints.is_empty() {
-            self.path.endpoints.push(point(0.0, 0.0));
-        }
-
-        self.in_sub_path = true;
-        QuadraticBezierSegment {
-            from: *self.path.endpoints.last().unwrap(),
-            ctrl: ctrl_pos,
-            to: to_pos,
-        }.for_each_monotonic(&mut |monotonic| {
-            self.monotonic_quadratic_bezier_to(
-                monotonic.segment().from,
-                monotonic.segment().to
-            );
-        });
-    }
-
-    pub fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) {
-        if self.path.endpoints.is_empty() {
-            self.path.endpoints.push(point(0.0, 0.0));
-        }
-
-        self.in_sub_path = true;
-
-        let tolerance = 0.1;
-        cubic_to_monotonic_quadratics(
-            &CubicBezierSegment {
-                from: *self.path.endpoints.last().unwrap(),
-                ctrl1,
-                ctrl2,
-                to,
-            },
-            tolerance,
-            &mut |monotonic| {
-                self.monotonic_quadratic_bezier_to(
-                    monotonic.segment().ctrl,
-                    monotonic.segment().to,
-                );
-            }
-        );
-    }
-
-    pub fn arc(&mut self, center: Point, radii: Vector, sweep_angle: Angle, x_rotation: Angle) {
-        if self.path.endpoints.is_empty() {
-            self.path.endpoints.push(point(0.0, 0.0));
-        }
-
-        self.in_sub_path = true;
-        let from = *self.path.endpoints.last().unwrap();
-        let start_angle = (from - center).angle_from_x_axis() - x_rotation;
-
-        Arc {
-            center,
-            radii,
-            start_angle,
-            sweep_angle,
-            x_rotation,
-        }.for_each_quadratic_bezier(
-            &mut |curve| { self.quadratic_bezier_to(curve.from, curve.to); }
-        );
-    }
-
-    fn segment_is_too_small(&self, to: &Point) -> bool {
-        (*self.path.endpoints.last().unwrap() - *to).square_length() < self.tolerance * self.tolerance
-    }
-
-    fn monotonic_quadratic_bezier_to(&mut self, ctrl_pos: Point, to_pos: Point) {
-        if self.segment_is_too_small(&to_pos) {
-            return;
-        }
-        let from = EndpointId((self.path.endpoints.len() - 1) as u16);
-        let to = EndpointId(from.0 + 1);
-        self.path.endpoints.push(to_pos);
-
-        let ctrl = CtrlPointId((self.path.ctrl_points.len() - 1) as u16);
-        self.path.ctrl_points.push(ctrl_pos);
-
-        self.path.segments.push(Segment{ from, ctrl, to });
-    }
-
-    fn end_sub_path(&mut self, is_closed: bool) {
-        if !self.in_sub_path {
-            return;
-        }
-        let mut sp_end = self.path.segments.len();
-        let sp_start = self.path.sub_paths.last()
-            .map(|sp| sp.range.start)
-            .unwrap();
-        if sp_end > sp_start {
-            if is_closed && !self.path.endpoints.is_empty() {
-                let first = self.path.segments[sp_start].from.0 as usize;
-                let first_point = self.path.endpoints[first];
-                if self.line_to(first_point) {
-                    sp_end += 1;
-                }
-            }
-
-            *self.path.sub_paths.last_mut().unwrap() = SubPathInfo {
-                range: sp_start..sp_end,
-                is_closed,
-            };
-            self.path.sub_paths.push(SubPathInfo {
-                range: sp_end..sp_end,
-                is_closed,
-            });
-        }
-
-        self.in_sub_path = false;
-    }
-
-    pub fn build(self) -> Path {
-        self.path
-    }
-}
-
-impl FlatPathBuilder for Builder {
-    type PathType = Path;
-
-    fn move_to(&mut self, to: Point) { self.move_to(to); }
-
-    fn line_to(&mut self, to: Point) { self.line_to(to); }
-
-    fn close(&mut self) { self.close(); }
-
-    fn build(self) -> Path { self.build() }
-
-    fn build_and_reset(&mut self) -> Path {
-        let mut tmp = Builder::new();
-        mem::swap(self, &mut tmp);
-        tmp.build()
-    }
-
-    fn current_position(&self) -> Point {
-        let default = Point::new(0.0, 0.0);
-        *self.path.endpoints.last().unwrap_or(&default)
-    }
-}
-
-impl PathBuilder for Builder {
-    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point) {
-        self.quadratic_bezier_to(ctrl, to);
-    }
-
-    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) {
-        self.cubic_bezier_to(ctrl1, ctrl2, to);
-    }
-
-    fn arc(&mut self, center: Point, radii: Vector, sweep_angle: Angle, x_rotation: Angle) {
-        self.arc(center, radii, sweep_angle, x_rotation);
-    }
 }
 
 pub struct FillTessellator {
@@ -445,10 +97,9 @@ struct ActiveEdge {
     winding: i16,
     is_merge: bool,
 
-    from_id: EndpointId,
-    ctrl_id: CtrlPointId,
-    to_id: EndpointId,
-    upper_vertex: VertexId,
+    from_id: VertexId,
+    ctrl_id: VertexId,
+    to_id: VertexId,
 }
 
 struct ActiveEdges {
@@ -568,6 +219,7 @@ impl Spans {
     }
 }
 
+#[derive(Debug)]
 struct PendingEdge {
     from: Point, // TODO: unnecessary since this is always the current position
     to: Point,
@@ -576,11 +228,9 @@ struct PendingEdge {
     range_start: f32,
     angle: f32,
 
-    from_id: EndpointId,
-    ctrl_id: CtrlPointId,
-    to_id: EndpointId,
-
-    upper_vertex: VertexId,
+    from_id: VertexId,
+    ctrl_id: VertexId,
+    to_id: VertexId,
 
     winding: i16,
 }
@@ -622,13 +272,13 @@ impl FillTessellator {
     ) {
         self.fill_rule = options.fill_rule;
 
-        let mut events = Traversal::new();
-
-        path.sort(&mut events);
+        let mut tx_builder = TraversalBuilder::with_capacity(128);
+        tx_builder.set_path(path.as_slice());
+        let (mut events, mut edge_data) = tx_builder.build();
 
         builder.begin_geometry();
 
-        self.tessellator_loop(path, &mut events, builder);
+        self.tessellator_loop(path, &mut events, &mut edge_data, builder);
 
         builder.end_geometry();
 
@@ -646,77 +296,53 @@ impl FillTessellator {
         &mut self,
         path: &Path,
         events: &mut Traversal,
+        edge_data: &[EdgeData],
         output: &mut dyn GeometryBuilder<Vertex>
     ) {
         let mut current_event = events.first_id();
         while events.valid_id(current_event) {
-            let mut edges_above = 0;
             self.current_position = events.position(current_event);
-            let current_endpoint = events.endpoint(current_event);
             let vertex_id = output.add_vertex(self.current_position);
 
             let mut current_sibling = current_event;
             while events.valid_id(current_sibling) {
-                let segment_id_a = events.segment(current_sibling);
-                let segment_id_b = path.previous_segment(segment_id_a);
-                let endpoint_id_b = path.segment_from(segment_id_b);
-                let endpoint_id_a = path.segment_to(segment_id_a);
-                let endpoint_pos_a = path.endpoint(endpoint_id_a);
-                let endpoint_pos_b = path.endpoint(endpoint_id_b);
-                let after_a = is_after(self.current_position, endpoint_pos_a);
-                let after_b = is_after(self.current_position, endpoint_pos_b);
-
-                if after_a {
-                    edges_above += 1;
-                } else {
-                    let ctrl_id_a = path.segment_ctrl(segment_id_a);
-                    self.edges_below.push(PendingEdge {
-                        from: self.current_position,
-                        ctrl: path.ctrl_point(ctrl_id_a),
-                        to: endpoint_pos_a,
-
-                        range_start: 0.0,
-                        angle: (endpoint_pos_a - self.current_position).angle_from_x_axis().radians,
-
-                        from_id: current_endpoint,
-                        ctrl_id: ctrl_id_a,
-                        to_id: endpoint_id_a,
-
-                        upper_vertex: vertex_id,
-
-                        winding: 1,
-                    });
+                let edge = &edge_data[current_sibling];
+                // We insert "fake" edges when there are end events
+                // to make sure we process that vertex even if it has
+                // no edge below.
+                if edge.to == VertexId::INVALID {
+                    current_sibling = events.next_sibling_id(current_sibling);
+                    continue;
                 }
-
-                if after_b {
-                    edges_above += 1;
+                let to = path[edge.to];
+                let ctrl = if edge.ctrl != VertexId::INVALID {
+                    path[edge.ctrl]
                 } else {
-                    let ctrl_id_b = path.segment_ctrl(segment_id_b);
-                    self.edges_below.push(PendingEdge {
-                        from: self.current_position,
-                        ctrl: path.ctrl_point(ctrl_id_b),
-                        to: endpoint_pos_b,
+                    point(f32::NAN, f32::NAN)
+                };
+                self.edges_below.push(PendingEdge {
+                    from: self.current_position,
+                    ctrl,
+                    to,
+                    range_start: 0.0,
+                    angle: (to - self.current_position).angle_from_x_axis().radians,
+                    // TODO: To use the real vertices in the Path we have to stop
+                    // using GeometryBuilder::add_vertex.
+                    //from_id: edge.from,
+                    //ctrl_id: edge.ctrl,
+                    //to_id: edge.to,
+                    from_id: vertex_id,
+                    ctrl_id: VertexId::INVALID,
+                    to_id: VertexId::INVALID,
 
-                        range_start: 0.0,
-                        angle: (endpoint_pos_b - self.current_position).angle_from_x_axis().radians,
-
-                        from_id: current_endpoint,
-                        ctrl_id: ctrl_id_b,
-                        to_id: endpoint_id_b,
-
-                        upper_vertex: vertex_id,
-
-                        winding: -1,
-                    });
-                }
+                    winding: edge.winding,
+                });
 
                 current_sibling = events.next_sibling_id(current_sibling);
             }
 
             self.process_events(
                 vertex_id,
-                current_endpoint,
-                edges_above,
                 output,
             );
 
@@ -727,13 +353,13 @@ impl FillTessellator {
     fn process_events(
         &mut self,
         current_vertex: VertexId,
-        current_endpoint: EndpointId,
-        edges_above: u32,
         output: &mut dyn GeometryBuilder<Vertex>,
     ) {
-        tess_log!(self, "\n --- events at [{}, {}]                       {} -> {}",
+        debug_assert!(!self.current_position.x.is_nan() && !self.current_position.y.is_nan());
+        tess_log!(self, "\n --- events at [{}, {}] {:?}         {} edges below",
             self.current_position.x, self.current_position.y,
-            edges_above, self.edges_below.len(),
+            current_vertex,
+            self.edges_below.len(),
         );
 
         // The span index starts at -1 so that entering the first span (of index 0) increments
@@ -770,7 +396,7 @@ impl FillTessellator {
                     active_edge.to = self.current_position;
                     // This is probably not necessary but it's confusing to have the two
                     // not matching.
-                    active_edge.to_id = current_endpoint;
+                    active_edge.to_id = current_vertex;
                     winding.span_index += 1;
                 } else {
                     // \.....\ /...../
@@ -794,7 +420,6 @@ impl FillTessellator {
 
             if points_are_equal(self.current_position, active_edge.to) {
                 if !connecting_edges {
-                    debug_assert!(edges_above != 0);
                     connecting_edges = true;
                 }
             } else {
@@ -873,9 +498,9 @@ impl FillTessellator {
             //    \./...  <-- active_edge
             //     x....  <-- current vertex
             let active_edge: &mut ActiveEdge = &mut self.active.edges[edge_idx];
-            let merge_vertex: VertexId = active_edge.upper_vertex;
+            let merge_vertex: VertexId = active_edge.from_id;
             let merge_position = active_edge.from;
-
+            //println!("merge vertex {:?} -> {:?}", merge_vertex, current_vertex);
             self.fill.merge_spans(
                 span_index,
                 &self.current_position,
@@ -913,16 +538,15 @@ impl FillTessellator {
                 range_start: 0.0,
                 angle: (to - self.current_position).angle_from_x_axis().radians,
 
-                from_id: current_endpoint,
-                ctrl_id: CtrlPointId(u16::MAX),
+                from_id: current_vertex,
+                ctrl_id: VertexId::INVALID,
                 to_id: self.active.edges[edge_idx].to_id,
 
-                upper_vertex: current_vertex,
                 winding: self.active.edges[edge_idx].winding,
             });
 
             self.active.edges[edge_idx].to = self.current_position;
-            self.active.edges[edge_idx].to_id = current_endpoint;
+            self.active.edges[edge_idx].to_id = current_vertex;
         }
 
         // Fix up above index range in case there was no connecting edges.
@@ -952,9 +576,9 @@ impl FillTessellator {
             e.from = e.to;
             e.ctrl = e.to;
             e.winding = 0;
-            e.from_id = e.to_id;
-            e.ctrl_id = CtrlPointId::INVALID;
-            e.upper_vertex = current_vertex;
+            e.from_id = current_vertex;
+            e.ctrl_id = VertexId::INVALID;
+            e.to_id = VertexId::INVALID;
         }
 
         // The range of pending edges below the current vertex to look at in the
@@ -976,7 +600,7 @@ impl FillTessellator {
             let edge_above = above.start - 1;
 
             let upper_pos = self.active.edges[edge_above].from;
-            let upper_id = self.active.edges[edge_above].upper_vertex;
+            let upper_id = self.active.edges[edge_above].from_id;
             tess_log!(self, " ** split ** edge {} span: {} upper {:?}", edge_above, winding.span_index, upper_pos);
 
             if self.active.edges[edge_above].is_merge {
@@ -1100,7 +724,11 @@ impl FillTessellator {
 
                         // TODO: if this is an intersection we must create a vertex
                         // and use it instead of the upper endpoint of the edge.
-                        let vertex = self.edges_below[in_idx].upper_vertex;
+                        // TODO: we should use from_id but right now it points to the
+                        // vertex in the path object and not the one we added with
+                        // add_vertex
+                        //let vertex = self.edges_below[in_idx].from_id;
+                        let vertex = current_vertex;
                         tess_log!(self, " begin span {} ({})", winding.span_index, self.fill.spans.len());
                         self.fill.begin_span(
                             winding.span_index,
@@ -1155,7 +783,6 @@ impl FillTessellator {
                 from_id: edge.from_id,
                 to_id: edge.to_id,
                 ctrl_id: edge.ctrl_id,
-                upper_vertex: edge.upper_vertex,
             });
         }
     }
@@ -1214,9 +841,16 @@ pub struct TraversalEvent {
     position: Point,
 }
 
+#[derive(Clone, Debug)]
+struct EdgeData {
+    from: VertexId,
+    ctrl: VertexId,
+    to: VertexId,
+    winding: i16,
+}
+
 pub struct Traversal {
     events: Vec<TraversalEvent>,
-    path_data: Vec<(EndpointId, SegmentId)>,
     first: usize,
     sorted: bool,
 }
@@ -1227,7 +861,14 @@ impl Traversal {
     pub fn new() -> Self {
         Traversal {
             events: Vec::new(),
-            path_data: Vec::new(),
+            first: 0,
+            sorted: false,
+        }
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Traversal {
+            events: Vec::with_capacity(cap),
             first: 0,
             sorted: false,
         }
@@ -1235,23 +876,20 @@ impl Traversal {
 
     pub fn reserve(&mut self, n: usize) {
         self.events.reserve(n);
-        self.path_data.reserve(n);
     }
 
-    pub fn push(&mut self, position: Point, endpoint: EndpointId, segment: SegmentId) {
+    pub fn push(&mut self, position: Point) {
         let next_event = self.events.len() + 1;
         self.events.push(TraversalEvent {
             position,
             next_sibling: usize::MAX,
             next_event,
         });
-        self.path_data.push((endpoint, segment));
         self.sorted = false;
     }
 
     pub fn clear(&mut self) {
         self.events.clear();
-        self.path_data.clear();
         self.first = 0;
         self.sorted = false;
     }
@@ -1263,10 +901,6 @@ impl Traversal {
     pub fn next_sibling_id(&self, id: usize) -> usize { self.events[id].next_sibling }
 
     pub fn valid_id(&self, id: usize) -> bool { id < self.events.len() }
-
-    pub fn endpoint(&self, id: usize) -> EndpointId { self.path_data[id].0 }
-
-    pub fn segment(&self, id: usize) -> SegmentId { self.path_data[id].1 }
 
     pub fn position(&self, id: usize) -> Point { self.events[id].position }
 
@@ -1347,7 +981,7 @@ impl Traversal {
                         current_sibling = next_sibling;
                         next_sibling = self.next_sibling_id(current_sibling);
                     }
-                    self.events[current_sibling].next_sibling = next;                    
+                    self.events[current_sibling].next_sibling = next;
                 }
             }
         }
@@ -1390,18 +1024,171 @@ impl Traversal {
     }
 }
 
+struct TraversalBuilder {
+    current: Point,
+    current_id: VertexId,
+    first: Point,
+    first_id: VertexId,
+    prev: Point,
+    second: Point,
+    nth: u32,
+    tx: Traversal,
+    edge_data: Vec<EdgeData>,
+}
+
+impl TraversalBuilder {
+    fn with_capacity(cap: usize) -> Self {
+        TraversalBuilder {
+            current: point(f32::NAN, f32::NAN),
+            first: point(f32::NAN, f32::NAN),
+            prev: point(f32::NAN, f32::NAN),
+            second: point(f32::NAN, f32::NAN),
+            current_id: VertexId::INVALID,
+            first_id: VertexId::INVALID,
+            nth: 0,
+            tx: Traversal::with_capacity(cap),
+            edge_data: Vec::with_capacity(cap),
+        }
+    }
+
+    fn set_path(&mut self, path: PathSlice) {
+        if path.is_empty() {
+            return;
+        }
+        let mut cursor = path.start();
+        loop {
+            match path.event_at_cursor(cursor) {
+                PathEvent::MoveTo(to) => {
+                    self.move_to(to, cursor.vertex);
+                }
+                PathEvent::LineTo(to) => {
+                    self.line_to(to, cursor.vertex);
+                }
+                PathEvent::QuadraticTo(ctrl, to) => {
+                    self.quad_to(to, cursor.vertex, cursor.vertex + 1);
+                }
+                PathEvent::Close => {
+                    self.close();
+                }
+                _ => { unimplemented!(); }
+            }
+
+            if let Some(next) = path.next_cursor(cursor) {
+                cursor = next;
+            } else {
+                break;
+            }
+        }
+        self.close();
+    }
+
+    fn vertex_event(&mut self, at: Point) {
+        self.tx.push(at);
+        self.edge_data.push(EdgeData {
+            from: VertexId::INVALID,
+            ctrl: VertexId::INVALID,
+            to: VertexId::INVALID,
+            winding: 0,
+        });
+    }
+
+    fn close(&mut self) {
+        if self.nth == 0 {
+            return;
+        }
+
+        // Unless we are already back to the first point we no need to
+        // to insert an edge.
+        let first = self.first;
+        if self.current != self.first {
+            let first_id = self.first_id;
+            self.line_to(first, first_id)
+        }
+
+        // Since we can only check for the need of a vertex event when
+        // we have a previous edge, we skipped it for the first edge
+        // and have to do it now.
+        if is_after(self.first, self.prev) && is_after(self.first, self.second) {
+            self.vertex_event(first);
+        }
+
+        self.nth = 0;
+    }
+
+    fn move_to(&mut self, to: Point, to_id: VertexId) {
+        if self.nth > 0 {
+            self.close();
+        }
+
+        self.nth = 0;
+        self.first = to;
+        self.current = to;
+        self.first_id = to_id;
+        self.current_id = to_id;
+    }
+
+    fn line_to(&mut self, to: Point, to_id: VertexId) {
+        self.quad_to(to, VertexId::INVALID, to_id);
+    }
+
+    fn quad_to(&mut self, to: Point, ctrl_id: VertexId, mut to_id: VertexId) {
+        if self.current == to {
+            return;
+        }
+
+        let next_id = to_id;
+        let mut from = self.current;
+        let mut from_id = self.current_id;
+        let mut winding = 1;
+        if is_after(from, to) {
+            if self.nth > 0 && is_after(from, self.prev) {
+                self.vertex_event(from);
+            }
+
+            from = to;
+            swap(&mut from_id, &mut to_id);
+            winding = -1;
+        }
+
+        //println!("Edge {:?}/{:?} {:?} ->", from_id, to_id, from);
+        debug_assert!(from_id != VertexId::INVALID);
+        debug_assert!(to_id != VertexId::INVALID);
+        self.tx.push(from);
+        self.edge_data.push(EdgeData {
+            from: from_id,
+            ctrl: ctrl_id,
+            to: to_id,
+            winding,
+        });
+
+        if self.nth == 0 {
+            self.second = to;
+        }
+
+        self.nth += 1;
+        self.prev = self.current;
+        self.current = to;
+        self.current_id = next_id;
+    }
+
+    fn build(mut self) -> (Traversal, Vec<EdgeData>) {
+        self.close();
+        self.tx.sort();
+
+        (self.tx, self.edge_data)
+    }
+}
+
 #[test]
 fn test_traversal_sort_1() {
-    let e = EndpointId::INVALID;
-    let s = SegmentId::INVALID;
     let mut tx = Traversal::new();
-    tx.push(point(0.0, 0.0), e, s);
-    tx.push(point(4.0, 0.0), e, s);
-    tx.push(point(2.0, 0.0), e, s);
-    tx.push(point(3.0, 0.0), e, s);
-    tx.push(point(4.0, 0.0), e, s);
-    tx.push(point(0.0, 0.0), e, s);
-    tx.push(point(6.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0));
+    tx.push(point(4.0, 0.0));
+    tx.push(point(2.0, 0.0));
+    tx.push(point(3.0, 0.0));
+    tx.push(point(4.0, 0.0));
+    tx.push(point(0.0, 0.0));
+    tx.push(point(6.0, 0.0));
 
     tx.sort();
     tx.assert_sorted();
@@ -1409,13 +1196,11 @@ fn test_traversal_sort_1() {
 
 #[test]
 fn test_traversal_sort_2() {
-    let e = EndpointId::INVALID;
-    let s = SegmentId::INVALID;
     let mut tx = Traversal::new();
-    tx.push(point(0.0, 0.0), e, s);
-    tx.push(point(0.0, 0.0), e, s);
-    tx.push(point(0.0, 0.0), e, s);
-    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0));
+    tx.push(point(0.0, 0.0));
+    tx.push(point(0.0, 0.0));
+    tx.push(point(0.0, 0.0));
 
     tx.sort();
     tx.assert_sorted();
@@ -1423,15 +1208,13 @@ fn test_traversal_sort_2() {
 
 #[test]
 fn test_traversal_sort_3() {
-    let e = EndpointId::INVALID;
-    let s = SegmentId::INVALID;
     let mut tx = Traversal::new();
-    tx.push(point(0.0, 0.0), e, s);
-    tx.push(point(1.0, 0.0), e, s);
-    tx.push(point(2.0, 0.0), e, s);
-    tx.push(point(3.0, 0.0), e, s);
-    tx.push(point(4.0, 0.0), e, s);
-    tx.push(point(5.0, 0.0), e, s);
+    tx.push(point(0.0, 0.0));
+    tx.push(point(1.0, 0.0));
+    tx.push(point(2.0, 0.0));
+    tx.push(point(3.0, 0.0));
+    tx.push(point(4.0, 0.0));
+    tx.push(point(5.0, 0.0));
 
     tx.sort();
     tx.assert_sorted();
@@ -1439,15 +1222,13 @@ fn test_traversal_sort_3() {
 
 #[test]
 fn test_traversal_sort_4() {
-    let e = EndpointId::INVALID;
-    let s = SegmentId::INVALID;
     let mut tx = Traversal::new();
-    tx.push(point(5.0, 0.0), e, s);
-    tx.push(point(4.0, 0.0), e, s);
-    tx.push(point(3.0, 0.0), e, s);
-    tx.push(point(2.0, 0.0), e, s);
-    tx.push(point(1.0, 0.0), e, s);
-    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(5.0, 0.0));
+    tx.push(point(4.0, 0.0));
+    tx.push(point(3.0, 0.0));
+    tx.push(point(2.0, 0.0));
+    tx.push(point(1.0, 0.0));
+    tx.push(point(0.0, 0.0));
 
     tx.sort();
     tx.assert_sorted();
@@ -1455,21 +1236,19 @@ fn test_traversal_sort_4() {
 
 #[test]
 fn test_traversal_sort_5() {
-    let e = EndpointId::INVALID;
-    let s = SegmentId::INVALID;
     let mut tx = Traversal::new();
-    tx.push(point(5.0, 0.0), e, s);
-    tx.push(point(5.0, 0.0), e, s);
-    tx.push(point(4.0, 0.0), e, s);
-    tx.push(point(4.0, 0.0), e, s);
-    tx.push(point(3.0, 0.0), e, s);
-    tx.push(point(3.0, 0.0), e, s);
-    tx.push(point(2.0, 0.0), e, s);
-    tx.push(point(2.0, 0.0), e, s);
-    tx.push(point(1.0, 0.0), e, s);
-    tx.push(point(1.0, 0.0), e, s);
-    tx.push(point(0.0, 0.0), e, s);
-    tx.push(point(0.0, 0.0), e, s);
+    tx.push(point(5.0, 0.0));
+    tx.push(point(5.0, 0.0));
+    tx.push(point(4.0, 0.0));
+    tx.push(point(4.0, 0.0));
+    tx.push(point(3.0, 0.0));
+    tx.push(point(3.0, 0.0));
+    tx.push(point(2.0, 0.0));
+    tx.push(point(2.0, 0.0));
+    tx.push(point(1.0, 0.0));
+    tx.push(point(1.0, 0.0));
+    tx.push(point(0.0, 0.0));
+    tx.push(point(0.0, 0.0));
 
     tx.sort();
     tx.assert_sorted();
@@ -1479,9 +1258,58 @@ fn test_traversal_sort_5() {
 use geometry_builder::{VertexBuffers, simple_builder};
 
 #[test]
+fn new_tess_triangle() {
+    let mut builder = Path::builder();
+    builder.move_to(point(0.0, 0.0));
+    builder.line_to(point(5.0, 1.0));
+    builder.line_to(point(3.0, 5.0));
+    builder.close();
+
+    let path = builder.build();
+
+    let mut tess = FillTessellator::new();
+    tess.enable_logging();
+
+    let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
+
+    tess.tessellate_path(
+        &path,
+        &FillOptions::default(),
+        &mut simple_builder(&mut buffers),
+    );
+}
+
+#[test]
+fn new_tess0() {
+    let mut builder = Path::builder();
+    builder.move_to(point(0.0, 0.0));
+    builder.line_to(point(5.0, 0.0));
+    builder.line_to(point(5.0, 5.0));
+    builder.line_to(point(0.0, 5.0));
+    builder.close();
+    builder.move_to(point(1.0, 1.0));
+    builder.line_to(point(4.0, 1.0));
+    builder.line_to(point(4.0, 4.0));
+    builder.line_to(point(1.0, 4.0));
+    builder.close();
+
+    let path = builder.build();
+
+    let mut tess = FillTessellator::new();
+
+    let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
+
+    tess.tessellate_path(
+        &path,
+        &FillOptions::default(),
+        &mut simple_builder(&mut buffers),
+    );
+}
+
+#[test]
 fn new_tess1() {
 
-    let mut builder = Builder::new();
+    let mut builder = Path::builder();
     builder.move_to(point(0.0, 0.0));
     builder.line_to(point(5.0, -5.0));
     builder.line_to(point(10.0, 0.0));
@@ -1514,7 +1342,7 @@ fn new_tess1() {
 #[test]
 fn new_tess_merge() {
 
-    let mut builder = Builder::new();
+    let mut builder = Path::builder();
     builder.move_to(point(0.0, 0.0));  // start
     builder.line_to(point(5.0, 5.0));  // merge
     builder.line_to(point(5.0, 1.0));  // start
