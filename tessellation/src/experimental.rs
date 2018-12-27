@@ -92,8 +92,6 @@ struct ActiveEdge {
     to: Point,
     ctrl: Point,
 
-    range_start: f32,
-
     winding: i16,
     is_merge: bool,
 
@@ -221,11 +219,9 @@ impl Spans {
 
 #[derive(Debug)]
 struct PendingEdge {
-    from: Point, // TODO: unnecessary since this is always the current position
     to: Point,
     ctrl: Point,
 
-    range_start: f32,
     angle: f32,
 
     from_id: VertexId,
@@ -321,10 +317,8 @@ impl FillTessellator {
                     point(f32::NAN, f32::NAN)
                 };
                 self.edges_below.push(PendingEdge {
-                    from: self.current_position,
                     ctrl,
                     to,
-                    range_start: 0.0,
                     angle: (to - self.current_position).angle_from_x_axis().radians,
                     // TODO: To use the real vertices in the Path we have to stop
                     // using GeometryBuilder::add_vertex.
@@ -531,11 +525,9 @@ impl FillTessellator {
         for edge_idx in edges_to_split {
             let to = self.active.edges[edge_idx].to;
             self.edges_below.push(PendingEdge {
-                from: self.current_position,
                 ctrl: point(f32::NAN, f32::NAN),
                 to,
 
-                range_start: 0.0,
                 angle: (to - self.current_position).angle_from_x_axis().radians,
 
                 from_id: current_vertex,
@@ -768,16 +760,14 @@ impl FillTessellator {
         }
 
         // Insert the pending edges.
-
+        let from = self.current_position;
         let first_edge_below = above.start;
         for (i, edge) in self.edges_below.drain(..).enumerate() {
             let idx = first_edge_below + i;
-
             self.active.edges.insert(idx, ActiveEdge {
-                from: edge.from,
+                from,
                 to: edge.to,
                 ctrl: edge.ctrl,
-                range_start: edge.range_start,
                 winding: edge.winding,
                 is_merge: false,
                 from_id: edge.from_id,
