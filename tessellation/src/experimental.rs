@@ -1,9 +1,8 @@
-use std::mem;
 use std::cmp::Ordering;
 
 use {FillOptions, FillRule, Side};
 use geom::math::*;
-use geom::{LineSegment, QuadraticBezierSegment, CubicBezierSegment, Arc};
+use geom::{LineSegment, QuadraticBezierSegment};
 use geom::cubic_to_quadratic::cubic_to_monotonic_quadratics;
 use geometry_builder::{GeometryBuilder, VertexId};
 use std::ops::Range;
@@ -11,7 +10,7 @@ use path_fill::MonotoneTessellator;
 use path::builder::*;
 use path::PathEvent;
 use path::default::{Path, PathSlice};
-use std::{u16, u32, f32};
+use std::{u32, f32};
 use std::env;
 use std::mem::swap;
 
@@ -335,10 +334,12 @@ impl FillTessellator {
                 current_sibling = events.next_sibling_id(current_sibling);
             }
 
-            self.process_events(
-                vertex_id,
-                output,
-            );
+            if !self.process_events(vertex_id, output) {
+                // Something went wrong, attempt to salvage the state of the sweep
+                // line and try again.
+                self.recover_from_error();
+                assert!(self.process_events(vertex_id, output));
+            }
 
             current_event = events.next_id(current_event);
         }
@@ -348,9 +349,9 @@ impl FillTessellator {
         &mut self,
         current_vertex: VertexId,
         output: &mut dyn GeometryBuilder<Vertex>,
-    ) {
+    ) -> bool {
         debug_assert!(!self.current_position.x.is_nan() && !self.current_position.y.is_nan());
-        tess_log!(self, "\n --- events at [{}, {}] {:?}         {} edges below",
+        tess_log!(self, "\n --- events at [{},{}] {:?}         {} edges below",
             self.current_position.x, self.current_position.y,
             current_vertex,
             self.edges_below.len(),
@@ -382,6 +383,8 @@ impl FillTessellator {
         // the current point and a second one one that traverses the edges that
         // connect with the the current point.
 
+        let mut extra_iteration = true; // false TODO: this breaks some tests.
+        let mut prev_ex = f32::MIN;
         for (i, active_edge) in self.active.edges.iter_mut().enumerate() {
             // First deal with the merge case.
             if active_edge.is_merge {
@@ -420,6 +423,12 @@ impl FillTessellator {
                 let ex = active_edge.solve_x_for_y(self.current_position.y);
                 tess_log!(self, "ex: {}", ex);
 
+                if ex < prev_ex {
+                    //panic!("Wrong sweep line ordering");
+                    return false;
+                }
+                prev_ex = ex;
+
                 if ex == self.current_position.x && !active_edge.is_merge {
                     tess_log!(self, " -- vertex on an edge!");
                     edges_to_split.push(i);
@@ -427,9 +436,16 @@ impl FillTessellator {
                     connecting_edges = true;
                 }
 
+                // Run an extra iteration of this loop to get a chance to detect incorrect
+                // ordering of the active edges.
                 if ex > self.current_position.x {
                     above.end = i;
-                    break;
+                    if extra_iteration {
+                        break;
+                    } else {
+                        extra_iteration = true;
+                        continue;
+                    }
                 }
             }
 
@@ -466,7 +482,7 @@ impl FillTessellator {
                 }
                 (Transition::Out, false) => {
                     let in_idx = prev_transition_in.unwrap();
-                    tess_log!(self, " ** end ** edges: [{}, {}] span: {}",
+                    tess_log!(self, " ** end ** edges: [{},{}] span: {}",
                         in_idx, i,
                         winding.span_index
                     );
@@ -558,7 +574,7 @@ impl FillTessellator {
             //  .....x.....
             //
 
-            tess_log!(self, " ** merge ** edges: [{}, {}] span: {}",
+            tess_log!(self, " ** merge ** edges: [{},{}] span: {}",
                 in_idx, above.end - 1,
                 winding.span_index
             );
@@ -705,7 +721,7 @@ impl FillTessellator {
                 Transition::Out => {
                     if let Some(in_idx) = prev_transition_in {
 
-                        tess_log!(self, " ** start ** edges: [{}, {}] span: {}", in_idx, i, winding.span_index);
+                        tess_log!(self, " ** start ** edges: [{},{}] span: {}", in_idx, i, winding.span_index);
 
                         // Start event.
                         //
@@ -744,6 +760,8 @@ impl FillTessellator {
             }
         }
         tess_log!(self, "spans: {}", self.fill.spans.len());
+
+        true
     }
 
     fn update_active_edges(&mut self, above: Range<usize>) {
@@ -774,6 +792,45 @@ impl FillTessellator {
                 to_id: edge.to_id,
                 ctrl_id: edge.ctrl_id,
             });
+        }
+    }
+
+    fn recover_from_error(&mut self) {
+        tess_log!(self, "Attempt to recover from error");
+
+        let y = self.current_position.y;
+        self.active.edges.sort_by(|a, b| {
+            let ax = a.solve_x_for_y(y);
+            let bx = b.solve_x_for_y(y);
+            ax.partial_cmp(&bx).unwrap_or_else(||{
+                let angle_a = (a.to - a.from).angle_from_x_axis().radians;
+                let angle_b = (b.to - b.from).angle_from_x_axis().radians;
+                angle_b.partial_cmp(&angle_a).unwrap_or(Ordering::Equal)
+            })
+        });
+
+        // The span index starts at -1 so that entering the first span (of index 0) increments
+        // it to zero.
+        let mut winding = WindingState {
+            span_index: -1,
+            number: 0,
+            transition: Transition::None,
+        };
+
+        for edge in &self.active.edges {
+            if edge.is_merge {
+                winding.span_index += 1;
+            } else {
+                self.fill_rule.update_winding(&mut winding, edge.winding);
+            }
+
+            if winding.span_index > self.fill.spans.len() as i32 {
+                self.fill.begin_span(
+                    winding.span_index,
+                    &edge.from,
+                    edge.from_id,
+                );
+            }
         }
     }
 
@@ -1357,4 +1414,32 @@ fn new_tess_merge() {
     // "M 0 0 L 5 5 L 5 1 L 10 6 L 11 2 L 11 10 L 0 9 Z"
 }
 
-// cargo run --features=experimental -- show "M 0 0 L 1 1 0 2 Z M 2 0 1 1 2 2 Z" --tessellator experimental -fs
+#[test]
+fn test_intersection_1() {
+    let mut builder = Path::builder();
+
+    builder.move_to(point(118.82771, 64.41283));
+    builder.line_to(point(23.451895, 50.336365));
+    builder.line_to(point(123.39044, 68.36287));
+    builder.close();
+
+    builder.move_to(point(80.39975, 58.73177));
+    builder.line_to(point(80.598236, 60.38033));
+    builder.line_to(point(63.05017, 63.488304));
+    builder.close();
+
+    let path = builder.build();
+
+    let mut tess = FillTessellator::new();
+
+    let mut buffers: VertexBuffers<Vertex, u16> = VertexBuffers::new();
+
+    tess.tessellate_path(
+        &path,
+        &FillOptions::default(),
+        &mut simple_builder(&mut buffers),
+    );
+
+    // SVG path syntax:
+    // "M 118.82771 64.41283 L 23.451895 50.336365 L 123.39044 68.36287 ZM 80.39975 58.73177 L 80.598236 60.38033 L 63.05017 63.488304 Z"
+}
