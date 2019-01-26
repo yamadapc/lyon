@@ -926,13 +926,68 @@ impl Traversal {
     }
 
     pub fn push(&mut self, position: Point) {
+        if self.sorted {
+            self.push_sorted(position);
+        } else {
+            self.push_unsorted(position);
+        }
+    }
+
+    fn push_unsorted(&mut self, position: Point) {
         let next_event = self.events.len() + 1;
         self.events.push(TraversalEvent {
             position,
             next_sibling: usize::MAX,
             next_event,
         });
-        self.sorted = false;
+    }
+
+    fn push_sorted(&mut self, position: Point) {
+        self.events.push(TraversalEvent {
+            position,
+            next_sibling: usize::MAX,
+            next_event: usize::MAX,
+        });
+
+        let id = self.events.len() - 1;
+        println!("id = {}", id);
+        let mut current = self.first_id();
+        let mut prev = current;
+        while self.valid_id(current) {
+            let evt_pos = self.events[current].position;
+            println!("current: {} pos: {:?} {:?}", current, evt_pos, compare_positions(position, evt_pos));
+            match compare_positions(position, evt_pos) {
+                Ordering::Greater => {}
+                Ordering::Equal => {
+                    // Add to sibling list.
+                    let mut current_sibling = current;
+                    let mut next_sibling = self.next_sibling_id(current);
+                    while self.valid_id(next_sibling) {
+                        current_sibling = next_sibling;
+                        next_sibling = self.next_sibling_id(current_sibling);
+                    }
+                    self.events[current_sibling].next_sibling = id;
+                    return;
+                }
+                Ordering::Less => {
+                    if prev != current {
+                        // Insert between `prev` and `current`.
+                        self.events[prev].next_event = id;
+                    } else {
+                        // It's the first element.
+                        self.first = id;
+                    }
+                    self.events[id].next_event = current;
+                    return;
+                }
+            }
+
+            prev = current;
+            current = self.next_id(current);
+        }
+
+        // Append at the end.
+        self.events[prev].next_event = id;
     }
 
     pub fn clear(&mut self) {
@@ -1032,6 +1087,12 @@ impl Traversal {
                 }
             }
         }
+
+        // Before sorting we make it so the last element's next index is the size of the
+        // array so that pushing elements puts them into the list and we'll sort later.
+        // For sorted insertions though, we want to directly insert at the right place,
+        // so having the last element point to the new elements location is undesired.
+        self.events[last].next_event = usize::MAX;
     }
 
     fn log(&self) {
@@ -1056,9 +1117,11 @@ impl Traversal {
     }
 
     fn assert_sorted(&self) {
+        println!("assert sorted");
         let mut current = self.first;
         let mut pos = point(f32::MIN, f32::MIN);
         while self.valid_id(current) {
+            println!("- {:?} : {:?}", current, self.events[current].position);
             assert!(is_after(self.events[current].position, pos));
             pos = self.events[current].position;
             let mut current_sibling = current;
@@ -1298,6 +1361,30 @@ fn test_traversal_sort_5() {
     tx.push(point(0.0, 0.0));
 
     tx.sort();
+    tx.assert_sorted();
+}
+
+#[test]
+fn test_traversal_push_sorted() {
+    let mut tx = Traversal::new();
+    tx.push(point(5.0, 0.0));
+    tx.push(point(4.0, 0.0));
+    tx.push(point(3.0, 0.0));
+    tx.push(point(2.0, 0.0));
+    tx.push(point(1.0, 0.0));
+    tx.push(point(0.0, 0.0));
+
+    tx.sort();
+    tx.push_sorted(point(1.5, 0.0));
+    tx.assert_sorted();
+
+    tx.push_sorted(point(2.5, 0.0));
+    tx.assert_sorted();
+
+    tx.push_sorted(point(2.5, 0.0));
+    tx.assert_sorted();
+
+    tx.push_sorted(point(6.5, 0.0));
     tx.assert_sorted();
 }
 
