@@ -346,6 +346,136 @@ impl Builder {
     }
 }
 
+pub fn reverse_path(path: PathSlice) -> Path {
+    let points = &path.points[..];
+    // At each iteration, p points to the first point after the current verb.
+    let mut p = points.len();
+    let mut need_close = false;
+    let mut need_moveto = true;
+
+    let mut builder = Builder::with_capacity(points.len());
+
+    for v in path.verbs.iter().rev().cloned() {
+        match v {
+            Verb::LineTo
+            | Verb::QuadraticTo
+            | Verb::CubicTo => {
+                if need_moveto {
+                    need_moveto = false;
+                    builder.move_to(points[p - 1]);
+                }
+            }
+            _ => {}
+        }
+
+        match v {
+            Verb::Close => {
+                need_close = true;
+                builder.move_to(points[p - 1]);
+                need_moveto = false;
+            }
+            Verb::MoveTo => {
+                if need_close {
+                    need_close = false;
+                    builder.close();
+                }
+                need_moveto = true;
+            }
+            Verb::LineTo => {
+                builder.line_to(points[p - 2]);
+            }
+            Verb::QuadraticTo => {
+                builder.quadratic_bezier_to(points[p - 2], points[p - 3]);
+            }
+            Verb::CubicTo => {
+                builder.cubic_bezier_to(points[p - 2], points[p - 3], points[p - 4]);
+            }
+        }
+        p -= n_stored_points(v) as usize;
+    }
+
+    builder.build()
+}
+
+#[test]
+fn test_reverse_path() {
+    let mut builder = Path::builder();
+    builder.move_to(point(0.0, 0.0));
+    builder.line_to(point(1.0, 0.0));
+    builder.line_to(point(1.0, 1.0));
+    builder.line_to(point(0.0, 1.0));
+
+    builder.move_to(point(10.0, 0.0));
+    builder.line_to(point(11.0, 0.0));
+    builder.line_to(point(11.0, 1.0));
+    builder.line_to(point(10.0, 1.0));
+    builder.close();
+
+    builder.move_to(point(20.0, 0.0));
+    builder.quadratic_bezier_to(point(21.0, 0.0), point(21.0, 1.0));
+
+    let p1 = builder.build();
+
+    let p2 = reverse_path(p1.as_slice());
+
+    let mut it = p2.iter();
+
+    assert_eq!(it.next(), Some(PathEvent::MoveTo(point(21.0, 1.0))));
+    assert_eq!(it.next(), Some(PathEvent::QuadraticTo(point(21.0, 0.0), point(20.0, 0.0))));
+
+    assert_eq!(it.next(), Some(PathEvent::MoveTo(point(10.0, 1.0))));
+    assert_eq!(it.next(), Some(PathEvent::LineTo(point(11.0, 1.0))));
+    assert_eq!(it.next(), Some(PathEvent::LineTo(point(11.0, 0.0))));
+    assert_eq!(it.next(), Some(PathEvent::LineTo(point(10.0, 0.0))));
+    assert_eq!(it.next(), Some(PathEvent::Close));
+
+    assert_eq!(it.next(), Some(PathEvent::MoveTo(point(0.0, 1.0))));
+    assert_eq!(it.next(), Some(PathEvent::LineTo(point(1.0, 1.0))));
+    assert_eq!(it.next(), Some(PathEvent::LineTo(point(1.0, 0.0))));
+    assert_eq!(it.next(), Some(PathEvent::LineTo(point(0.0, 0.0))));
+
+    assert_eq!(it.next(), None);
+}
+
+#[test]
+fn test_reverse_path_no_close() {
+    let mut builder = Path::builder();
+    builder.move_to(point(0.0, 0.0));
+    builder.line_to(point(1.0, 0.0));
+    builder.line_to(point(1.0, 1.0));
+
+    let p1 = builder.build();
+
+    let p2 = reverse_path(p1.as_slice());
+
+    let mut it = p2.iter();
+
+    assert_eq!(it.next(), Some(PathEvent::MoveTo(point(1.0, 1.0))));
+    assert_eq!(it.next(), Some(PathEvent::LineTo(point(1.0, 0.0))));
+    assert_eq!(it.next(), Some(PathEvent::LineTo(point(0.0, 0.0))));
+    assert_eq!(it.next(), None);
+}
+
+#[test]
+fn test_reverse_empty_path() {
+    let p1 = Path::builder().build();
+    let p2 = reverse_path(p1.as_slice());
+    assert_eq!(p2.iter().next(), None);
+}
+
+#[test]
+#[ignore]
+fn test_reverse_single_moveto() {
+    let mut builder = Path::builder();
+    builder.move_to(point(0.0, 0.0));
+    let p1 = builder.build();
+    let p2 = reverse_path(p1.as_slice());
+    let mut it = p2.iter();
+    assert_eq!(it.next(), Some(PathEvent::MoveTo(point(0.0, 0.0))));
+    assert_eq!(it.next(), None);
+}
+
+
 #[inline]
 fn nan_check(p: Point) {
     debug_assert!(p.x.is_finite());
