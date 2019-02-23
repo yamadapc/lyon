@@ -1,14 +1,11 @@
 //! The default path data structure.
 
-use builder::*;
-
 use PathEvent;
 use math::*;
-use geom::{LineSegment, QuadraticBezierSegment, CubicBezierSegment, Arc};
+use geom::{LineSegment, QuadraticBezierSegment, CubicBezierSegment};
 
 use std::iter::IntoIterator;
 use std::ops;
-use std::mem;
 
 pub enum Event<'l, Endpoint, CtrlPoint> {
     StartSubPath,
@@ -22,18 +19,27 @@ pub enum Event<'l, Endpoint, CtrlPoint> {
 pub struct EdgeId(u32);
 impl EdgeId {
     pub fn to_usize(&self) -> usize { self.0 as usize }
+    fn dec(&self) -> Self { EdgeId(self.0 - 1) }
+    fn inc(&self) -> Self { EdgeId(self.0 + 1) }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CtrlPointId(u32);
 impl CtrlPointId {
+    const INVALID: Self = CtrlPointId(!0u32);
+
     pub fn to_usize(&self) -> usize { self.0 as usize }
+    //fn dec(&self) -> Self { CtrlPointId(self.0 - 1) }
+    //fn inc(&self) -> Self { CtrlPointId(self.0 + 1) }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EndpointId(u32);
 impl EndpointId {
+    //const INVALID: Self = EndpointId(!0u32);
     pub fn to_usize(&self) -> usize { self.0 as usize }
+    fn dec(&self) -> Self { EndpointId(self.0 - 1) }
+    //fn inc(&self) -> Self { EndpointId(self.0 + 1) }
 }
 
 /// Enumeration corresponding to the [PathEvent](https://docs.rs/lyon_core/*/lyon_core/events/enum.PathEvent.html) enum
@@ -342,6 +348,48 @@ impl<Endpoint: Vertex, CtrlPoint: Vertex> Builder<Endpoint, CtrlPoint> {
     }
 }
 
+/// An iterator for `Path` and `PathSlice`.
+#[derive(Clone, Debug)]
+pub struct AdvIter<'l, Endpoint, CtrlPoint> {
+    endpoints: &'l[Endpoint],
+    ctrl_points: &'l[CtrlPoint],
+    edges: ::std::slice::Iter<'l, EdgeInfo>,
+}
+
+impl<'l, Endpoint, CtrlPoint> AdvIter<'l, Endpoint, CtrlPoint> {
+    fn new(endpoints: &'l [Endpoint], ctrl_points: &'l [CtrlPoint], edges: &'l [EdgeInfo]) -> Self {
+        Iter {
+            endpoints,
+            ctrl_points,
+            edges: edges.iter(),
+        }
+    }
+}
+/*
+EdgeInfo {
+    from: self.prev_endpoint,
+    ctrl1: ctrl_id,
+    ctrl2: CtrlPointId::INVALID,
+    to: to_id,
+    prev: prev_id,
+    next: next_id,
+}
+*/
+impl<'l, Endpoint: Vertex, CtrlPoint: Vertex> Iterator for AdvIter<'l, Endpoint, CtrlPoint> {
+    type Item = PathEvent;
+    fn next(&mut self) -> Option<PathEvent> {
+        self.edges.next().map(|edge| {
+            let verb = if edge.ctrl1 == CtrlPointId::INVALID {
+                Verb::LineTo
+            } else if edge.ctrl2 == CtrlPointId::INVALID {
+                Verb::QuadraticTo
+            } else {
+                Verb::CubicTo
+            }
+        });
+    }
+}
+
 #[test]
 fn basic() {
     let mut builder = Path::builder();
@@ -407,6 +455,156 @@ struct EdgeInfo {
     ctrl2: CtrlPointId,
     next: EdgeId,
     prev: EdgeId,
+}
+
+pub struct AdvancedBuilder<Endpoint, CtrlPoint> {
+    endpoints: Vec<Endpoint>,
+    ctrl_points: Vec<CtrlPoint>,
+    edges: Vec<EdgeInfo>,
+    first_edge: EdgeId,
+    first_endpoint: EndpointId,
+    prev_endpoint: EndpointId,
+    need_moveto: bool,
+}
+
+impl<Endpoint: Vertex, CtrlPoint: Vertex> AdvancedBuilder<Endpoint, CtrlPoint> {
+    pub fn new() -> Self {
+        AdvancedBuilder {
+            endpoints: Vec::new(),
+            ctrl_points: Vec::new(),
+            edges: Vec::new(),
+            first_edge: EdgeId(0),
+            first_endpoint: EndpointId(0),
+            prev_endpoint: EndpointId(0),
+            need_moveto: true,
+        }
+    }
+
+    pub fn move_to(&mut self, to: Endpoint) {
+        self.need_moveto = false;
+        self.first_endpoint = EndpointId(self.endpoints.len() as u32);
+        self.endpoints.push(to);
+    }
+
+    pub fn line_to(&mut self, to: Endpoint) {
+        self.move_to_if_needed();
+        let to_id = EndpointId(self.endpoints.len() as u32);
+        let edge_id = EdgeId(self.edges.len() as u32);
+        let prev = edge_id.dec();
+        let next = edge_id.inc();
+        self.endpoints.push(to);
+        self.edges.push(EdgeInfo {
+            from: to_id.dec(),
+            ctrl1: CtrlPointId::INVALID,
+            ctrl2: CtrlPointId::INVALID,
+            to: to_id,
+            prev,
+            next,
+        });
+    }
+
+    pub fn close(&mut self) {
+        // Relative path ops tend to accumulate small floating point imprecisions
+        // which results in the last segment ending almost but not quite at the
+        // start of the sub-path, causing a new edge to be inserted which often
+        // intersects with the first or last edge. This can affect algorithms that
+        // Don't handle self-intersecting paths.
+        // Deal with this by snapping the last point if it is very close to the
+        // start of the sub path.
+        let mut add_edge = true;
+        let first_position = self.endpoints[self.first_endpoint.to_usize()].position();
+        if let Some(p) = self.endpoints.last_mut() {
+            let d = (p.position() - first_position).abs();
+            if d.x + d.y < 0.0001 {
+                p.set_position(first_position);
+                add_edge = false;
+            }
+        }
+
+        let last = EdgeId(self.edges.len() as u32 - 1);
+        let first = self.first_edge;
+
+        if add_edge {
+            let prev = EdgeId(self.edges.len() as u32 - 1);
+            let from = self.prev_endpoint;
+            let to = self.first_endpoint;
+            self.edges.push(EdgeInfo {
+                from,
+                to,
+                ctrl1: CtrlPointId::INVALID,
+                ctrl2: CtrlPointId::INVALID,
+                prev,
+                next: first,
+            });
+        }
+
+        self.edges[first.to_usize()].prev = last;
+        self.edges[last.to_usize()].next = first;
+
+        self.need_moveto = true;
+    }
+
+    pub fn quadratic_bezier_to(&mut self, ctrl: CtrlPoint, to: Endpoint) {
+        self.move_to_if_needed();
+        let to_id = EndpointId(self.endpoints.len() as u32);
+        let ctrl_id = CtrlPointId(self.ctrl_points.len() as u32);
+        let prev_id = EdgeId(self.edges.len() as u32 - 1);
+        let next_id = EdgeId(self.edges.len() as u32 + 1);
+        self.ctrl_points.push(ctrl);
+        self.endpoints.push(to);
+        self.edges.push(EdgeInfo {
+            from: self.prev_endpoint,
+            ctrl1: ctrl_id,
+            ctrl2: CtrlPointId::INVALID,
+            to: to_id,
+            prev: prev_id,
+            next: next_id,
+        });
+        self.prev_endpoint = to_id;
+
+    }
+
+    pub fn cubic_bezier_to(&mut self, ctrl1: CtrlPoint, ctrl2: CtrlPoint, to: Endpoint) {
+        self.move_to_if_needed();
+        let to_id = EndpointId(self.endpoints.len() as u32);
+        let ctrl1_id = CtrlPointId(self.ctrl_points.len() as u32);
+        let ctrl2_id = CtrlPointId(self.ctrl_points.len() as u32 + 1);
+        let prev_id = EdgeId(self.edges.len() as u32 - 1);
+        let next_id = EdgeId(self.edges.len() as u32 + 1);
+        self.ctrl_points.push(ctrl1);
+        self.ctrl_points.push(ctrl2);
+        self.endpoints.push(to);
+        self.edges.push(EdgeInfo {
+            from: self.prev_endpoint,
+            ctrl1: ctrl1_id,
+            ctrl2: ctrl2_id,
+            to: to_id,
+            prev: prev_id,
+            next: next_id,
+        });
+        self.prev_endpoint = to_id;
+    }
+
+    pub fn current_position(&self) -> Point {
+        self.endpoints.last()
+            .map(|p| p.position())
+            .unwrap_or_else(|| point(0.0, 0.0))
+    }
+
+    pub fn build(self) -> AdvancedPath<Endpoint, CtrlPoint> {
+        AdvancedPath {
+            endpoints: self.endpoints,
+            ctrl_points: self.ctrl_points,
+            edges: self.edges,
+        }
+    }
+
+    fn move_to_if_needed(&mut self) {
+        if self.need_moveto {
+            let first = self.endpoints[self.first_endpoint.to_usize()].clone();
+            self.move_to(first);
+        }
+    }
 }
 
 /*
