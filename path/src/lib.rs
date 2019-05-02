@@ -47,6 +47,7 @@ pub extern crate serde;
 mod events;
 mod path_state;
 mod path;
+mod traversal;
 pub mod iterator;
 pub mod builder;
 
