@@ -257,7 +257,8 @@ impl EventQueue {
         }
 
         let range = 0..self.events.len();
-        self.first = self.merge_sort(range);
+        self.first = self.merge_sort();
+        //self.first = self.merge_sort_recursive(range);
     }
 
     /// Merge sort with two twists:
@@ -265,26 +266,99 @@ impl EventQueue {
     /// - We take advantage of having events stored contiguously in a vector
     ///   by recursively splitting ranges of the array instead of traversing
     ///   the lists to find a split point.
-    fn merge_sort(&mut self, range: Range<usize>) -> TessEventId {
+    fn merge_sort(&mut self) -> TessEventId {
+        if self.events.len() < 2 {
+            return 0;
+        }
+
+        #[derive(Debug)]
+        struct Elt {
+            id: TessEventId,
+            lvl: u32,
+        }
+
+        let last = self.events.len() as u32 - 1;
+        let mut cursor = 2;
+
+        let mut stack: Vec<Elt> = Vec::new();
+        stack.reserve(self.events.len() / 2);
+        let mut stack_top = Elt { id: 0, lvl: 0 };
+
+        let mut current = Elt { id: 1, lvl: 0 };
+
+        loop {
+            //println!("current {:?}, stack top: {:?}, cursor: {}, stack: {}", current, stack_top, cursor, stack.len());
+            if stack_top.lvl == current.lvl {
+                current = Elt {
+                    id: self.merge(stack_top.id, current.id),
+                    lvl: current.lvl + 1,
+                };
+                let push = match stack.last() {
+                    Some(top) => top.lvl != current.lvl,
+                    None => true,
+                };
+                if push {
+                    if cursor > last {
+                        stack_top.id = INVALID_EVENT_ID;
+                        break;
+                    }
+
+                    //println!("push {:?}", current);
+                    stack_top = current;
+                    current = Elt {
+                        id: cursor,
+                        lvl: 0,
+                    };
+                    cursor += 1;
+                } else {
+                    stack_top = stack.pop().unwrap();
+                }
+            } else {
+                if cursor > last {
+                    break;
+                }
+
+                //println!("push {:?}*", current);
+                stack.push(stack_top);
+                stack_top = current;
+                current = Elt {
+                    id: cursor,
+                    lvl: 0,
+                };
+                cursor += 1;
+            }
+        }
+
+        //println!("finish {:?}", stack.len());
+        if stack_top.id != INVALID_EVENT_ID {
+            current.id = self.merge(current.id, stack_top.id);
+        }
+
+        while let Some(elt) = stack.pop() {
+            current.id = self.merge(current.id, elt.id);
+        }
+
+        current.id
+    }
+
+    fn merge_sort_recursive(&mut self, range: Range<usize>) -> TessEventId {
         let split = (range.start + range.end) / 2;
 
         if split == range.start {
             return range.start as TessEventId;
         }
 
-        let a_head = self.merge_sort(range.start..split);
-        let b_head = self.merge_sort(split..range.end);
+        let a_head = self.merge_sort_recursive(range.start..split);
+        let b_head = self.merge_sort_recursive(split..range.end);
 
         self.merge(a_head, b_head)
     }
 
     fn merge(&mut self, mut a: TessEventId, mut b: TessEventId) -> TessEventId {
-        if a == INVALID_EVENT_ID {
-            return b;
-        }
-        if b == INVALID_EVENT_ID {
-            return a;
-        }
+        debug_assert!(a != INVALID_EVENT_ID);
+        debug_assert!(b != INVALID_EVENT_ID);
+
+        //println!("merge {} and {}", a, b);
 
         debug_assert!(a != b);
         let mut first = true;
