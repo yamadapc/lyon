@@ -27,6 +27,28 @@ where
     }
 }
 
+/// Approximates a cubic bézier segment with a sequence of quadratic béziers.
+pub fn cubic_to_quadratics_levien<S: Scalar, F>(curve: &CubicBezierSegment<S>, tolerance: S, cb: &mut F)
+where
+    F: FnMut(&QuadraticBezierSegment<S>),
+{
+    debug_assert!(tolerance >= S::EPSILON);
+    let x = curve.from.x - S::THREE * curve.ctrl1.x + S::THREE * curve.ctrl2.x - curve.to.x;
+    let y = curve.from.y - S::THREE * curve.ctrl1.y + S::THREE * curve.ctrl2.y - curve.to.y;
+
+    let err = x * x + y * y;
+    let num_quadratics = (err / (S::value(432.0) * tolerance * tolerance)).powf(S::ONE / S::SIX).ceil();
+    let mut i = S::ZERO;
+    for _ in 0..num_quadratics.to_u32().unwrap() {
+        let t0 = i / num_quadratics;
+        let t1 = (i + S::ONE) / num_quadratics;
+
+        cb(&single_curve_approximation(&curve.split_range(t0..t1)));
+
+        i += S::ONE;
+    }
+}
+
 /// This is terrible as a general approximation but works if the cubic
 /// curve does not have inflection points and is "flat" enough. Typically
 /// usables after subdiving the curve a few times.
