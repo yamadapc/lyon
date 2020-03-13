@@ -392,6 +392,15 @@ impl<S: Scalar> CubicBezierSegment<S> {
         cubic_to_quadratics(self, tolerance, cb);
     }
 
+    /// Approximates the cubic bézier curve with sequence of quadratic ones,
+    /// invoking a callback at each step.
+    pub fn for_each_quadratic_bezier_levien<F>(&self, tolerance: S, cb: &mut F)
+    where
+        F: FnMut(&QuadraticBezierSegment<S>),
+    {
+        cubic_to_quadratics_levien(self, tolerance, cb);
+    }
+
     /// Approximates the cubic bézier curve with sequence of monotonic quadratic
     /// ones, invoking a callback at each step.
     pub fn for_each_monotonic_quadratic<F>(&self, tolerance: S, cb: &mut F)

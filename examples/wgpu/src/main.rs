@@ -86,9 +86,36 @@ fn main() {
     let num_instances: u32 = PRIM_BUFFER_LEN as u32 - 1;
     let tolerance = 0.02;
 
+    let cubic = lyon::geom::CubicBezierSegment {
+        from: point(0.0, 0.0),
+        ctrl1: point(100.0, 100.0),
+        ctrl2: point(20.0, -20.0),
+        to: point(30.0, 100.0),
+    };
+
+    let c1 = cubic.transformed(&lyon::geom::euclid::Translation2D::new(100.0, 0.0));
+    let c2 = cubic.transformed(&lyon::geom::euclid::Translation2D::new(200.0, 0.0));
+
+
     // Build a Path for the rust logo.
     let mut builder = SvgPathBuilder::new(Path::builder());
-    build_logo_path(&mut builder);
+    builder.move_to(point(0.0, 0.0));
+    for p in cubic.flattened(0.01) {
+        builder.line_to(p);
+    }
+    builder.move_to(c1.from);
+    c1.for_each_quadratic_bezier(0.05, &mut |quad| {
+        quad.for_each_flattened(0.1, &mut |to| {
+            builder.line_to(to)
+        });
+    });
+    builder.move_to(c2.from);
+    c2.for_each_quadratic_bezier_levien(0.05, &mut |quad| {
+        quad.for_each_flattened(0.1, &mut |to| {
+            builder.line_to(to)
+        });
+    });
+    //build_logo_path(&mut builder);
     let path = builder.build();
 
     let mut geometry: VertexBuffers<GpuVertex, u16> = VertexBuffers::new();
