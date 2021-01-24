@@ -62,6 +62,7 @@ pub struct FuzzCmd {
     pub max_points: Option<u32>,
     pub tessellator: Tessellator,
     pub ignore_errors: bool,
+    pub rasterize: bool
 }
 
 #[derive(Copy, Clone, Debug)]

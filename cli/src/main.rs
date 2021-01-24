@@ -123,6 +123,11 @@ fn main() {
                     Arg::with_name("IGNORE_ERRORS")
                         .long("ignore-errors")
                         .help("Try to continue when encoutering errors unless it is a panic."),
+                )
+                .arg(
+                    Arg::with_name("RASTERIZE")
+                        .long("rasterize")
+                        .help("Check for incorrect self-overlap in the tessellated triangles using a software rasterizer"),
                 ),
         )
         .subcommand(
@@ -217,6 +222,7 @@ fn main() {
                 .and_then(|str_val| str_val.parse::<u32>().ok()),
             tessellator: get_tessellator(fuzz_matches),
             ignore_errors: fuzz_matches.is_present("IGNORE_ERRORS"),
+            rasterize: fuzz_matches.is_present("RASTERIZE"),
         });
     }
 
