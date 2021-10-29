@@ -1,10 +1,9 @@
-use path::builder::*;
 use path::math::Point;
 use path::PathEvent;
 use path::{Path, PathSlice};
-use svg;
 
 pub type Polygons = Vec<Vec<Point>>;
+pub type PolygonsRef<'a> = &'a [Vec<Point>];
 
 pub fn path_to_polygons(path: PathSlice) -> Polygons {
     let mut polygons = Vec::new();
@@ -37,7 +36,7 @@ pub fn path_to_polygons(path: PathSlice) -> Polygons {
     polygons
 }
 
-pub fn polygons_to_path(polygons: &Polygons) -> Path {
+pub fn polygons_to_path(polygons: PolygonsRef) -> Path {
     let mut builder = Path::builder().flattened(0.05);
     for poly in polygons.iter() {
         let mut poly_iter = poly.iter();
@@ -85,7 +84,7 @@ pub fn find_reduced_test_case<F: Fn(Path) -> bool + panic::UnwindSafe + panic::R
         }
     }
 
-    let mut svg_path = svg::path_utils::PathSerializer::new();
+    let path = polygons_to_path(&polygons);
     println!(" ----------- reduced test case: -----------\n\n");
     println!("#[test]");
     println!("fn reduced_test_case() {{");
@@ -94,20 +93,17 @@ pub fn find_reduced_test_case<F: Fn(Path) -> bool + panic::UnwindSafe + panic::R
         let mut poly_iter = poly.iter();
         let pos = *poly_iter.next().unwrap();
         println!("    builder.begin(point({:.}, {:.}));", pos.x, pos.y);
-        svg_path.move_to(pos);
         for pos in poly_iter {
             println!("    builder.line_to(point({:.}, {:.}));", pos.x, pos.y);
-            svg_path.line_to(*pos);
         }
         println!("    builder.close();\n");
-        svg_path.close();
     }
     println!("    test_path(builder.build().as_slice());\n");
     println!("    // SVG path syntax:");
-    println!("    // \"{}\"", svg_path.build());
+    println!("    // \"{:?}\"", path);
     println!("}}\n\n");
 
-    polygons_to_path(&polygons)
+    path
 }
 
 use std::panic;

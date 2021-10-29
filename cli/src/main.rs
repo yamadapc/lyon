@@ -16,9 +16,9 @@ use commands::*;
 
 use lyon::algorithms::hatching::{DotOptions, HatchingOptions};
 use lyon::extra::debugging::find_reduced_test_case;
+use lyon::extra::parser::*;
 use lyon::geom::euclid::Angle;
 use lyon::path::Path;
-use lyon::svg::path_utils::build_path;
 use lyon::tessellation::{FillOptions, FillRule, LineCap, LineJoin, Orientation, StrokeOptions};
 use std::fs::File;
 use std::io::{stderr, stdout, Read, Write};
@@ -133,7 +133,7 @@ fn main() {
                 .arg(
                     Arg::with_name("ANTIALIASING")
                         .long("anti-aliasing")
-                        .help("Sets the anti-aliasing method to use")
+                        .help("Sets the anti-aliasing method to use (msaa or none)")
                         .value_name("ANTIALIASING")
                         .takes_value(true),
                 )
@@ -330,6 +330,20 @@ fn declare_tess_params<'a, 'b>(app: App<'a, 'b>, need_path: bool) -> App<'a, 'b>
             .takes_value(true),
     )
     .arg(
+        Arg::with_name("CUSTOM_ATTRIBUTES")
+            .long("custom-attributes")
+            .help("Custom attributes")
+            .value_name("CUSTOM_ATTRIBUTES")
+            .takes_value(true),
+    )
+    .arg(
+        Arg::with_name("VARIABLE_LINE_WIDTH")
+            .long("variable-line-width")
+            .help("Variable line width")
+            .value_name("VARIABLE_LINE_WIDTH")
+            .takes_value(true),
+    )
+    .arg(
         Arg::with_name("SWEEP_ORIENTATION")
             .long("sweep-orientation")
             .help("Traverse the geometry vertically or horizontally.")
@@ -367,27 +381,36 @@ fn get_path(matches: &ArgMatches) -> Option<Path> {
         return None;
     }
 
-    match build_path(Path::builder().with_svg(), &path_str) {
-        Ok(path) => Some(path),
+    let mut parser = PathParser::new();
+
+    let mut options = ParserOptions::DEFAULT;
+    if let Some(num_attributes_str) = matches.value_of("CUSTOM_ATTRIBUTES") {
+        options.num_attributes = num_attributes_str.parse::<usize>().unwrap_or(0);
+    }
+
+    let mut builder = Path::builder_with_attributes(options.num_attributes);
+
+    match parser.parse(&options, &mut Source::new(path_str.chars()), &mut builder) {
         Err(e) => {
             println!("Error while parsing path: {}", path_str);
             println!("{:?}", e);
-            None
         }
+        _ => {}
     }
+
+    Some(builder.build())
 }
 
 fn get_render_params(matches: &ArgMatches) -> RenderCmd {
     RenderCmd {
         aa: if let Some(aa) = matches.value_of("ANTIALIASING") {
             match aa {
-                "msaa4" => AntiAliasing::Msaa(4),
-                "msaa8" => AntiAliasing::Msaa(8),
-                "msaa16" => AntiAliasing::Msaa(16),
+                // wgpu currently only supports msaa 4 for protability reasons.
+                "msaa" => AntiAliasing::Msaa(4),
                 _ => AntiAliasing::None,
             }
         } else {
-            AntiAliasing::Msaa(8)
+            AntiAliasing::Msaa(4)
         },
         background: get_background(matches),
         debugger: get_debugger(matches),
@@ -411,8 +434,7 @@ fn get_tess_command(command: &ArgMatches, need_path: bool) -> TessellateCmd {
             Some(
                 FillOptions::tolerance(get_tolerance(&command))
                     .with_fill_rule(fill_rule)
-                    .with_sweep_orientation(orientation),
-            )
+                    .with_sweep_orientation(orientation))
         } else {
             None
         };
@@ -457,6 +479,13 @@ fn get_stroke(matches: &ArgMatches) -> Option<StrokeOptions> {
         if let Some(limit) = get_miter_limit(matches) {
             options.miter_limit = limit;
         }
+        if let Some(var_stroke_str) = matches.value_of("VARIABLE_LINE_WIDTH") {
+            options.variable_line_width = var_stroke_str
+                .parse::<u8>()
+                .ok()
+                .map(|idx| lyon::path::AttributeIndex(idx))
+        }
+
         Some(options)
     } else {
         None

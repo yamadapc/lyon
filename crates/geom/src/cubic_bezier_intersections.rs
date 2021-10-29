@@ -8,7 +8,7 @@ use crate::CubicBezierSegment;
 ///! See "Bézier Clipping method" in
 ///! https://scholarsarchive.byu.edu/facpub/1/
 ///! for motivation and details of how the process works.
-use crate::{point, Point, Rect};
+use crate::{point, Point, Box2D};
 use arrayvec::ArrayVec;
 use std::ops::Range;
 
@@ -22,10 +22,10 @@ use std::ops::Range;
 pub fn cubic_bezier_intersections_t<S: Scalar>(
     curve1: &CubicBezierSegment<S>,
     curve2: &CubicBezierSegment<S>,
-) -> ArrayVec<[(S, S); 9]> {
+) -> ArrayVec<(S, S), 9> {
     if !curve1
-        .fast_bounding_rect()
-        .intersects(&curve2.fast_bounding_rect())
+        .fast_bounding_box()
+        .intersects(&curve2.fast_bounding_box())
         || curve1 == curve2
         || (curve1.from == curve2.to
             && curve1.ctrl1 == curve2.ctrl2
@@ -100,7 +100,7 @@ fn point_curve_intersections<S: Scalar>(
     pt: &Point<S>,
     curve: &CubicBezierSegment<S>,
     epsilon: S,
-) -> ArrayVec<[S; 9]> {
+) -> ArrayVec<S, 9> {
     let mut result = ArrayVec::new();
 
     // (If both endpoints are epsilon close, we only return S::ZERO.)
@@ -154,7 +154,7 @@ fn point_curve_intersections<S: Scalar>(
         pt: &Point<S>,
         curve: &CubicBezierSegment<S>,
         epsilon: S,
-        result: &mut ArrayVec<[S; 9]>,
+        result: &mut ArrayVec<S, 9>,
     ) -> bool {
         if (curve.sample(t) - *pt).square_length() < epsilon {
             result.push(t);
@@ -175,7 +175,7 @@ fn line_curve_intersections<S: Scalar>(
     line_as_curve: &CubicBezierSegment<S>,
     curve: &CubicBezierSegment<S>,
     flip: bool,
-) -> ArrayVec<[(S, S); 9]> {
+) -> ArrayVec<(S, S), 9> {
     let mut result = ArrayVec::new();
     let baseline = line_as_curve.baseline();
     let curve_intersections = curve.line_intersections_t(&baseline.to_line());
@@ -201,7 +201,7 @@ fn line_curve_intersections<S: Scalar>(
 fn line_line_intersections<S: Scalar>(
     curve1: &CubicBezierSegment<S>,
     curve2: &CubicBezierSegment<S>,
-) -> ArrayVec<[(S, S); 9]> {
+) -> ArrayVec<(S, S), 9> {
     let mut result = ArrayVec::new();
 
     let intersection = curve1
@@ -218,7 +218,7 @@ fn line_line_intersections<S: Scalar>(
     fn parameters_for_line_point<S: Scalar>(
         curve: &CubicBezierSegment<S>,
         pt: &Point<S>,
-    ) -> ArrayVec<[S; 3]> {
+    ) -> ArrayVec<S, 3> {
         let line_is_mostly_vertical =
             S::abs(curve.from.y - curve.to.y) >= S::abs(curve.from.x - curve.to.x);
         if line_is_mostly_vertical {
@@ -264,7 +264,7 @@ fn add_curve_intersections<S: Scalar>(
     curve2: &CubicBezierSegment<S>,
     domain1: &Range<S>,
     domain2: &Range<S>,
-    intersections: &mut ArrayVec<[(S, S); 9]>,
+    intersections: &mut ArrayVec<(S, S), 9>,
     flip: bool,
     mut recursion_count: u32,
     mut call_count: u32,
@@ -328,7 +328,7 @@ fn add_curve_intersections<S: Scalar>(
 
     // (Don't call this before checking for point curves: points are inexact and can lead to false
     // negatives here.)
-    if !rectangles_overlap(&curve1.fast_bounding_rect(), &curve2.fast_bounding_rect()) {
+    if !rectangles_overlap(&curve1.fast_bounding_box(), &curve2.fast_bounding_box()) {
         return call_count;
     }
 
@@ -482,7 +482,7 @@ fn add_point_curve_intersection<S: Scalar>(
     curve: &CubicBezierSegment<S>,
     pt_domain: &Range<S>,
     curve_domain: &Range<S>,
-    intersections: &mut ArrayVec<[(S, S); 9]>,
+    intersections: &mut ArrayVec<(S, S), 9>,
     flip: bool,
 ) {
     let pt = pt_curve.from;
@@ -561,7 +561,7 @@ fn add_intersection<S: Scalar>(
     t2: S,
     orig_curve2: &CubicBezierSegment<S>,
     flip: bool,
-    intersections: &mut ArrayVec<[(S, S); 9]>,
+    intersections: &mut ArrayVec<(S, S), 9>,
 ) {
     let (t1, t2) = if flip { (t2, t1) } else { (t1, t2) };
     // (This should probably depend in some way on how large our input coefficients are.)
@@ -744,12 +744,12 @@ fn domain_value_at_t<S: Scalar>(domain: &Range<S>, t: S) -> S {
 }
 
 #[inline]
-// Rect.intersects doesn't count edge/corner intersections, this version does.
-fn rectangles_overlap<S: Scalar>(r1: &Rect<S>, r2: &Rect<S>) -> bool {
-    r1.origin.x <= r2.origin.x + r2.size.width
-        && r2.origin.x <= r1.origin.x + r1.size.width
-        && r1.origin.y <= r2.origin.y + r2.size.height
-        && r2.origin.y <= r1.origin.y + r1.size.height
+// Box2D::intersects doesn't count edge/corner intersections, this version does.
+fn rectangles_overlap<S: Scalar>(r1: &Box2D<S>, r2: &Box2D<S>) -> bool {
+    r1.min.x <= r2.max.x
+        && r2.min.x <= r1.max.x
+        && r1.min.y <= r2.max.y
+        && r2.min.y <= r1.max.y
 }
 
 #[cfg(test)]
@@ -893,7 +893,7 @@ fn test_cubic_control_point_touching() {
     // After splitting the curve2 loop in half, curve1.ctrl1 (and only that
     // point) touches the curve2 fat line - make sure we don't accept that as an
     // intersection. [We're really only interested in the right half of the loop - the rest of the
-    // loop is there just to get past an initial fast_bounding_rect check.]
+    // loop is there just to get past an initial fast_bounding_box check.]
     do_test(
         &CubicBezierSegment {
             from: point(-1.0, 0.0),

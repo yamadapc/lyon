@@ -1,5 +1,4 @@
 use crate::commands::{TessellateCmd, Tessellator};
-use lyon::path::traits::*;
 use lyon::path::Path;
 use lyon::tessellation::geometry_builder::*;
 use lyon::tessellation::{FillTessellator, StrokeTessellator};

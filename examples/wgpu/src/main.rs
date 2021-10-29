@@ -42,7 +42,7 @@ unsafe impl bytemuck::Zeroable for Globals {}
 struct GpuVertex {
     position: [f32; 2],
     normal: [f32; 2],
-    prim_id: i32,
+    prim_id: u32,
 }
 unsafe impl bytemuck::Pod for GpuVertex {}
 unsafe impl bytemuck::Zeroable for GpuVertex {}
@@ -90,21 +90,21 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
 /// Creates a texture that uses MSAA and fits a given swap chain
 fn create_multisampled_framebuffer(
     device: &wgpu::Device,
-    sc_desc: &wgpu::SwapChainDescriptor,
+    desc: &wgpu::SurfaceConfiguration,
     sample_count: u32,
 ) -> wgpu::TextureView {
     let multisampled_frame_descriptor = &wgpu::TextureDescriptor {
         label: Some("Multisampled frame descriptor"),
         size: wgpu::Extent3d {
-            width: sc_desc.width,
-            height: sc_desc.height,
+            width: desc.width,
+            height: desc.height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count,
         dimension: wgpu::TextureDimension::D2,
-        format: sc_desc.format,
-        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
+        format: desc.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
     };
 
     device
@@ -158,7 +158,7 @@ fn main() {
         .tessellate_path(
             &path,
             &FillOptions::tolerance(tolerance).with_fill_rule(tessellation::FillRule::NonZero),
-            &mut BuffersBuilder::new(&mut geometry, WithId(fill_prim_id as i32)),
+            &mut BuffersBuilder::new(&mut geometry, WithId(fill_prim_id as u32)),
         )
         .unwrap();
 
@@ -168,7 +168,7 @@ fn main() {
         .tessellate_path(
             &path,
             &StrokeOptions::tolerance(tolerance),
-            &mut BuffersBuilder::new(&mut geometry, WithId(stroke_prim_id as i32)),
+            &mut BuffersBuilder::new(&mut geometry, WithId(stroke_prim_id as u32)),
         )
         .unwrap();
 
@@ -178,7 +178,7 @@ fn main() {
         .tessellate_path(
             &arrow_path,
             &FillOptions::tolerance(tolerance),
-            &mut BuffersBuilder::new(&mut geometry, WithId(arrows_prim_id as i32)),
+            &mut BuffersBuilder::new(&mut geometry, WithId(arrows_prim_id as u32)),
         )
         .unwrap();
 
@@ -188,7 +188,7 @@ fn main() {
 
     fill_tess
         .tessellate_rectangle(
-            &Rect::new(point(-1.0, -1.0), size(2.0, 2.0)),
+            &Box2D { min: point(-1.0, -1.0), max: point(1.0, 1.0) },
             &FillOptions::DEFAULT,
             &mut BuffersBuilder::new(&mut bg_geometry, Custom),
         )
@@ -244,16 +244,16 @@ fn main() {
         stroke_width: 1.0,
         target_stroke_width: 1.0,
         draw_background: true,
-        cursor_position: (0.0, 0.0),
         window_size: PhysicalSize::new(DEFAULT_WINDOW_WIDTH as u32, DEFAULT_WINDOW_HEIGHT as u32),
         size_changed: true,
+        render: false,
     };
 
     let event_loop = EventLoop::new();
     let window = Window::new(&event_loop).unwrap();
 
     // create an instance
-    let instance = wgpu::Instance::new(wgpu::BackendBit::PRIMARY);
+    let instance = wgpu::Instance::new(wgpu::Backends::all());
 
     // create an surface
     let surface = unsafe { instance.create_surface(&window) };
@@ -262,6 +262,7 @@ fn main() {
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         compatible_surface: Some(&surface),
+        force_fallback_adapter: false,
     }))
     .unwrap();
     // create a device and a queue
@@ -278,25 +279,25 @@ fn main() {
     let vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&geometry.vertices),
-        usage: wgpu::BufferUsage::VERTEX,
+        usage: wgpu::BufferUsages::VERTEX,
     });
 
     let ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&geometry.indices),
-        usage: wgpu::BufferUsage::INDEX,
+        usage: wgpu::BufferUsages::INDEX,
     });
 
     let bg_vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&bg_geometry.vertices),
-        usage: wgpu::BufferUsage::VERTEX,
+        usage: wgpu::BufferUsages::VERTEX,
     });
 
     let bg_ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&bg_geometry.indices),
-        usage: wgpu::BufferUsage::INDEX,
+        usage: wgpu::BufferUsages::INDEX,
     });
 
     let prim_buffer_byte_size = (PRIM_BUFFER_LEN * std::mem::size_of::<Primitive>()) as u64;
@@ -305,32 +306,40 @@ fn main() {
     let prims_ubo = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Prims ubo"),
         size: prim_buffer_byte_size,
-        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
     let globals_ubo = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Globals ubo"),
         size: globals_buffer_byte_size,
-        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
-    let vs_module =
-        &device.create_shader_module(&wgpu::include_spirv!("./../shaders/geometry.vert.spv"));
-    let fs_module =
-        &device.create_shader_module(&wgpu::include_spirv!("./../shaders/geometry.frag.spv"));
-    let bg_vs_module =
-        &device.create_shader_module(&wgpu::include_spirv!("./../shaders/background.vert.spv"));
-    let bg_fs_module =
-        &device.create_shader_module(&wgpu::include_spirv!("./../shaders/background.frag.spv"));
+    let vs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        label: Some("Geometry vs"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("./../shaders/geometry.vs.wgsl").into()),
+    });
+    let fs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        label: Some("Geometry fs"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("./../shaders/geometry.fs.wgsl").into()),
+    });
+    let bg_vs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        label: Some("Background vs"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("./../shaders/background.vs.wgsl").into()),
+    });
+    let bg_fs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        label: Some("Background fs"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("./../shaders/background.fs.wgsl").into()),
+    });
 
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Bind group layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStage::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -340,7 +349,7 @@ fn main() {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStage::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -392,7 +401,7 @@ fn main() {
             entry_point: "main",
             buffers: &[wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<GpuVertex>() as u64,
-                step_mode: wgpu::InputStepMode::Vertex,
+                step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
                     wgpu::VertexAttribute {
                         offset: 0,
@@ -406,7 +415,7 @@ fn main() {
                     },
                     wgpu::VertexAttribute {
                         offset: 16,
-                        format: wgpu::VertexFormat::Sint32,
+                        format: wgpu::VertexFormat::Uint32,
                         shader_location: 2,
                     },
                 ],
@@ -419,7 +428,7 @@ fn main() {
                 wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Bgra8Unorm,
                     blend: None,
-                    write_mask: wgpu::ColorWrite::ALL,
+                    write_mask: wgpu::ColorWrites::ALL,
                 },
             ],
         }),
@@ -428,7 +437,7 @@ fn main() {
             polygon_mode: wgpu::PolygonMode::Fill,
             front_face: wgpu::FrontFace::Ccw,
             strip_index_format: None,
-            cull_mode: None,
+            cull_mode: Some(wgpu::Face::Back),
             clamp_depth: false,
             conservative: false,
         },
@@ -454,7 +463,7 @@ fn main() {
             entry_point: "main",
             buffers: &[wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<Point>() as u64,
-                step_mode: wgpu::InputStepMode::Vertex,
+                step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[wgpu::VertexAttribute {
                     offset: 0,
                     format: wgpu::VertexFormat::Float32x2,
@@ -469,7 +478,7 @@ fn main() {
                 wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Bgra8Unorm,
                     blend: None,
-                    write_mask: wgpu::ColorWrite::ALL,
+                    write_mask: wgpu::ColorWrites::ALL,
                 },
             ],
         }),
@@ -492,8 +501,8 @@ fn main() {
 
     let size = window.inner_size();
 
-    let mut swap_chain_desc = wgpu::SwapChainDescriptor {
-        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
+    let mut surface_desc = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: wgpu::TextureFormat::Bgra8Unorm,
         width: size.width,
         height: size.height,
@@ -502,7 +511,7 @@ fn main() {
 
     let mut multisampled_render_target = None;
 
-    let mut swap_chain = device.create_swap_chain(&surface, &swap_chain_desc);
+    surface.configure(&device, &surface_desc);
 
     let mut depth_texture_view = None;
 
@@ -511,8 +520,10 @@ fn main() {
     let mut frame_count: u32 = 0;
     let mut time_secs: f32 = 0.0;
 
+    window.request_redraw();
+
     event_loop.run(move |event, _, control_flow| {
-        if update_inputs(event, control_flow, &mut scene) {
+        if !update_inputs(event, &window, control_flow, &mut scene) {
             // keep polling inputs.
             return;
         }
@@ -520,22 +531,22 @@ fn main() {
         if scene.size_changed {
             scene.size_changed = false;
             let physical = scene.window_size;
-            swap_chain_desc.width = physical.width;
-            swap_chain_desc.height = physical.height;
-            swap_chain = device.create_swap_chain(&surface, &swap_chain_desc);
+            surface_desc.width = physical.width;
+            surface_desc.height = physical.height;
+            surface.configure(&device, &surface_desc);
 
             let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Depth texture"),
                 size: wgpu::Extent3d {
-                    width: swap_chain_desc.width,
-                    height: swap_chain_desc.height,
+                    width: surface_desc.width,
+                    height: surface_desc.height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
                 sample_count,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             });
 
             depth_texture_view =
@@ -544,7 +555,7 @@ fn main() {
             multisampled_render_target = if sample_count > 1 {
                 Some(create_multisampled_framebuffer(
                     &device,
-                    &swap_chain_desc,
+                    &surface_desc,
                     sample_count,
                 ))
             } else {
@@ -552,13 +563,21 @@ fn main() {
             };
         }
 
-        let frame = match swap_chain.get_current_frame() {
-            Ok(frame) => frame,
+        if !scene.render {
+            return;
+        }
+
+        scene.render = false;
+
+        let frame = match surface.get_current_texture() {
+            Ok(texture) => texture,
             Err(e) => {
                 println!("Swap-chain error: {:?}", e);
                 return;
             }
         };
+
+        let frame_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Encoder"),
@@ -585,7 +604,7 @@ fn main() {
             path.iter().flattened(0.01),
             offset,
             &mut walk::RepeatedPattern {
-                callback: |pos: Point, tangent: Vector, _| {
+                callback: |event: walk::WalkerEvent| {
                     if arrow_count + num_instances as usize + 1 >= PRIM_BUFFER_LEN {
                         // Don't want to overflow the primitive buffer,
                         // just skip the remaining arrows.
@@ -593,8 +612,8 @@ fn main() {
                     }
                     cpu_primitives[arrows_prim_id as usize + arrow_count] = Primitive {
                         color: [0.7, 0.9, 0.8, 1.0],
-                        translate: (pos * 2.3 - vector(80.0, 80.0)).to_array(),
-                        angle: tangent.angle_from_x_axis().get(),
+                        translate: (event.position * 2.3 - vector(80.0, 80.0)).to_array(),
+                        angle: event.tangent.angle_from_x_axis().get(),
                         scale: 2.0,
                         z_index: arrows_prim_id as i32,
                         ..Primitive::DEFAULT
@@ -625,7 +644,7 @@ fn main() {
 
         {
             // A resolve target is only supported if the attachment actually uses anti-aliasing
-            // So if sample_count == 1 then we must render directly to the swapchain's buffer
+            // So if sample_count == 1 then we must render directly to the surface's buffer
             let color_attachment = if let Some(msaa_target) = &multisampled_render_target {
                 wgpu::RenderPassColorAttachment {
                     view: msaa_target,
@@ -633,11 +652,11 @@ fn main() {
                         load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                         store: true,
                     },
-                    resolve_target: Some(&frame.output.view),
+                    resolve_target: Some(&frame_view),
                 }
             } else {
                 wgpu::RenderPassColorAttachment {
-                    view: &frame.output.view,
+                    view: &frame_view,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                         store: true,
@@ -682,6 +701,7 @@ fn main() {
         }
 
         queue.submit(Some(encoder.finish()));
+        frame.present();
 
         frame_count += 1;
         let now = Instant::now();
@@ -696,7 +716,7 @@ fn main() {
 
 /// This vertex constructor forwards the positions and normals provided by the
 /// tessellators and add a shape id.
-pub struct WithId(pub i32);
+pub struct WithId(pub u32);
 
 impl FillVertexConstructor<GpuVertex> for WithId {
     fn new_vertex(&mut self, vertex: tessellation::FillVertex) -> GpuVertex {
@@ -737,19 +757,23 @@ struct SceneParams {
     stroke_width: f32,
     target_stroke_width: f32,
     draw_background: bool,
-    cursor_position: (f32, f32),
     window_size: PhysicalSize<u32>,
     size_changed: bool,
+    render: bool,
 }
 
 fn update_inputs(
     event: Event<()>,
+    window: &Window,
     control_flow: &mut ControlFlow,
     scene: &mut SceneParams,
 ) -> bool {
     match event {
-        Event::MainEventsCleared => {
-            return false;
+        Event::RedrawRequested(_) => {
+            scene.render = true;
+        }
+        Event::RedrawEventsCleared => {
+            window.request_redraw();
         }
         Event::WindowEvent {
             event: WindowEvent::Destroyed,
@@ -761,12 +785,6 @@ fn update_inputs(
         } => {
             *control_flow = ControlFlow::Exit;
             return false;
-        }
-        Event::WindowEvent {
-            event: WindowEvent::CursorMoved { position, .. },
-            ..
-        } => {
-            scene.cursor_position = (position.x as f32, position.y as f32);
         }
         Event::WindowEvent {
             event: WindowEvent::Resized(size),

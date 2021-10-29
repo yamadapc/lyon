@@ -65,7 +65,7 @@
 //! For example a builder that approximates curves with a sequence of line segments:
 //!
 //! ```
-//! use lyon_path::{Path, traits::PathBuilder, geom::point};
+//! use lyon_path::{Path, geom::point};
 //!
 //! let tolerance = 0.05;// maximum distance between a curve and its approximation.
 //! let mut builder = Path::builder().flattened(tolerance);
@@ -79,12 +79,12 @@
 //! ```
 //!
 
-use crate::events::PathEvent;
+use crate::events::{Event, PathEvent};
 use crate::geom::{traits::Transformation, Arc, ArcFlags, LineSegment, SvgArc};
 use crate::math::*;
 use crate::path::Verb;
 use crate::polygon::Polygon;
-use crate::{EndpointId, Winding};
+use crate::{EndpointId, Winding, Attributes};
 
 use std::iter::IntoIterator;
 use std::marker::Sized;
@@ -121,6 +121,291 @@ impl std::fmt::Display for BorderRadii {
     }
 }
 
+// TODO: implement PathBuilder for NoAttrbutes<>
+
+/// A convenience wrapper for `PathBuilder` without custom attributes.
+///
+/// See the [PathBuilder] trait.
+///
+/// This simply forwards to an underlying `PathBuilder` implementation,
+/// using no attributes.
+#[derive(Clone, Debug, PartialEq, Hash)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+pub struct NoAttributes<B: PathBuilder> {
+    pub(crate) inner: B,
+}
+
+impl<B: PathBuilder> NoAttributes<B> {
+    #[inline]
+    pub fn wrap(inner: B) -> Self {
+        assert!(inner.num_attributes() == 0);
+        NoAttributes { inner }
+    }
+
+    pub fn new() -> Self where B: Default {
+        NoAttributes::wrap(B::default())
+    }
+
+    pub fn with_capacity(endpoints: usize, ctrl_points: usize) -> Self where B: Default {
+        let mut builder = B::default();
+        builder.reserve(endpoints, ctrl_points);
+        NoAttributes::wrap(builder)
+    }
+
+    /// Starts a new sub-path at a given position.
+    ///
+    /// There must be no sub-path in progress when this method is called.
+    /// `at` becomes the current position of the sub-path.
+    #[inline]
+    pub fn begin(&mut self, at: Point) -> EndpointId {
+        self.inner.begin(at, Attributes::NONE)
+    }
+
+    /// Ends the current sub path.
+    ///
+    /// A sub-path must be in progress when this method is called.
+    /// After this method is called, there is no sub-path in progress until
+    /// `begin` is called again.
+    #[inline]
+    pub fn end(&mut self, close: bool) {
+        self.inner.end(close);
+    }
+
+    /// Closes the current sub path.
+    ///
+    /// Shorthand for `builder.end(true)`.
+    #[inline]
+    pub fn close(&mut self) {
+        self.inner.close();
+    }
+
+    /// Adds a line segment to the current sub-path.
+    ///
+    /// A sub-path must be in progress when this method is called.
+    #[inline]
+    pub fn line_to(&mut self, to: Point) -> EndpointId {
+        self.inner.line_to(to, Attributes::NONE)
+    }
+
+    /// Adds a quadratic bézier curve to the current sub-path.
+    ///
+    /// A sub-path must be in progress when this method is called.
+    #[inline]
+    pub fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point) -> EndpointId {
+        self.inner.quadratic_bezier_to(ctrl, to, Attributes::NONE)
+    }
+
+    /// Adds a cubic bézier curve to the current sub-path.
+    ///
+    /// A sub-path must be in progress when this method is called.
+    #[inline]
+    pub fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) -> EndpointId {
+        self.inner.cubic_bezier_to(ctrl1, ctrl2, to, Attributes::NONE)
+    }
+
+    /// Hints at the builder that a certain number of endpoints and control
+    /// points will be added.
+    ///
+    /// The Builder implementation may use this information to pre-allocate
+    /// memory as an optimization.
+    #[inline]
+    pub fn reserve(&mut self, endpoints: usize, ctrl_points: usize) {
+        self.inner.reserve(endpoints, ctrl_points);
+    }
+
+    /// Applies the provided path event.
+    ///
+    /// By default this calls one of `begin`, `end`, `line`, `quadratic_bezier_segment`,
+    /// or `cubic_bezier_segment` according to the path event.
+    ///
+    /// The requirements for each method apply to the corresponding event.
+    #[inline]
+    pub fn path_event(&mut self, event: PathEvent) {
+        self.inner.path_event(event, Attributes::NONE);
+    }
+
+    /// Adds events from an iterator.
+    #[inline]
+    pub fn extend<Evts>(&mut self, events: Evts)
+    where
+        Evts: IntoIterator<Item = PathEvent>,
+    {
+        self.inner.extend(events, Attributes::NONE);
+    }
+
+    /// Adds a sub-path from a polygon.
+    ///
+    /// There must be no sub-path in progress when this method is called.
+    /// No sub-path is in progress after the method is called.
+    #[inline]
+    pub fn add_polygon(&mut self, polygon: Polygon<Point>) {
+        self.inner.add_polygon(polygon, Attributes::NONE);
+    }
+
+    /// Adds a sub-path containing a single point.
+    ///
+    /// There must be no sub-path in progress when this method is called.
+    /// No sub-path is in progress after the method is called.
+    #[inline]
+    pub fn add_point(&mut self, at: Point) -> EndpointId {
+        self.inner.add_point(at, Attributes::NONE)
+    }
+
+    /// Adds a sub-path containing a single line segment.
+    ///
+    /// There must be no sub-path in progress when this method is called.
+    /// No sub-path is in progress after the method is called.
+    #[inline]
+    pub fn add_line_segment(&mut self, line: &LineSegment<f32>) -> (EndpointId, EndpointId) {
+        self.inner.add_line_segment(line, Attributes::NONE)
+    }
+
+    /// Adds a sub-path containing an ellipse.
+    ///
+    /// There must be no sub-path in progress when this method is called.
+    /// No sub-path is in progress after the method is called.
+    #[inline]
+    pub fn add_ellipse(&mut self, center: Point, radii: Vector, x_rotation: Angle, winding: Winding) {
+        self.inner.add_ellipse(center, radii, x_rotation, winding, Attributes::NONE);
+    }
+
+    /// Adds a sub-path containing a circle.
+    ///
+    /// There must be no sub-path in progress when this method is called.
+    /// No sub-path is in progress after the method is called.
+    #[inline]
+    pub fn add_circle(&mut self, center: Point, radius: f32, winding: Winding)
+    where
+        B: Sized,
+    {
+        self.inner.add_circle(center, radius, winding, Attributes::NONE);
+    }
+
+    /// Adds a sub-path containing a rectangle.
+    ///
+    /// There must be no sub-path in progress when this method is called.
+    /// No sub-path is in progress after the method is called.
+    #[inline]
+    pub fn add_rectangle(&mut self, rect: &Box2D, winding: Winding) {
+        self.inner.add_rectangle(rect, winding, Attributes::NONE);
+    }
+
+    /// Adds a sub-path containing a rectangle.
+    ///
+    /// There must be no sub-path in progress when this method is called.
+    /// No sub-path is in progress after the method is called.
+    #[inline]
+    pub fn add_rounded_rectangle(
+        &mut self,
+        rect: &Box2D,
+        radii: &BorderRadii,
+        winding: Winding,
+    )
+    where
+        B: Sized,
+    {
+        self.inner.add_rounded_rectangle(rect, radii, winding, Attributes::NONE);
+    }
+
+    /// Returns a builder that approximates all curves with sequences of line segments.
+    #[inline]
+    pub fn flattened(self, tolerance: f32) -> NoAttributes<Flattened<B>>
+    where
+        B: Sized,
+    {
+        NoAttributes {
+            inner: Flattened::new(self.inner, tolerance),
+        }
+    }
+
+    /// Returns a builder that applies the given transformation to all positions.
+    #[inline]
+    pub fn transformed<Transform>(self, transform: Transform) -> NoAttributes<Transformed<B, Transform>>
+    where
+        B: Sized,
+        Transform: Transformation<f32>,
+    {
+        NoAttributes {
+            inner: Transformed::new(self.inner, transform),
+        }
+    }
+
+    /// Returns a builder that support SVG commands.
+    ///
+    /// This must be called before starting to add any sub-path.
+    #[inline]
+    pub fn with_svg(self) -> WithSvg<B>
+    where
+        B: Sized,
+    {
+        WithSvg::new(self.inner)
+    }
+
+    /// Builds a path object, consuming the builder.
+    #[inline]
+    pub fn build<P>(self) -> P where B: Build<PathType = P> {
+        self.inner.build()
+    }
+
+    #[inline]
+    pub fn inner(&self) -> &B {
+        &self.inner
+    }
+
+    #[inline]
+    pub fn inner_mut(&mut self) -> &mut B {
+        &mut self.inner
+    }
+
+    #[inline]
+    pub fn into_inner(self) -> B {
+        self.inner
+    }
+}
+
+impl<B: PathBuilder> PathBuilder for NoAttributes<B> {
+    #[inline]
+    fn num_attributes(&self) -> usize { 0 }
+
+    #[inline]
+    fn begin(&mut self, at: Point, _attributes: Attributes) -> EndpointId {
+        self.inner.begin(at, Attributes::NONE)
+    }
+
+    #[inline]
+    fn end(&mut self, close: bool) {
+        self.inner.end(close);
+    }
+
+    #[inline]
+    fn line_to(&mut self, to: Point, _attributes: Attributes) -> EndpointId {
+        self.inner.line_to(to, Attributes::NONE)
+    }
+
+    #[inline]
+    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, _attributes: Attributes) -> EndpointId {
+        self.inner.quadratic_bezier_to(ctrl, to, Attributes::NONE)
+    }
+
+    #[inline]
+    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, _attributes: Attributes) -> EndpointId {
+        self.inner.cubic_bezier_to(ctrl1, ctrl2, to, Attributes::NONE)
+    }
+
+    #[inline]
+    fn reserve(&mut self, endpoints: usize, ctrl_points: usize) {
+        self.inner.reserve(endpoints, ctrl_points)
+    }
+}
+
+impl<B: PathBuilder + Build> Build for NoAttributes<B> {
+    type PathType = B::PathType;
+
+    fn build(self) -> B::PathType {
+        self.inner.build()
+    }
+}
+
 /// The base path building interface.
 ///
 /// Unlike `SvgPathBuilder`, this interface strictly requires sub-paths to be manually
@@ -134,11 +419,12 @@ impl std::fmt::Display for BorderRadii {
 /// the `SvgPathBuilder` trait providing more permissive and richer interface is
 /// automatically implemented via the `WithSvg` adapter (See the `with_svg` method).
 pub trait PathBuilder {
+    fn num_attributes(&self) -> usize;
     /// Starts a new sub-path at a given position.
     ///
     /// There must be no sub-path in progress when this method is called.
     /// `at` becomes the current position of the sub-path.
-    fn begin(&mut self, at: Point) -> EndpointId;
+    fn begin(&mut self, at: Point, custom_attributes: Attributes) -> EndpointId;
 
     /// Ends the current sub path.
     ///
@@ -157,17 +443,17 @@ pub trait PathBuilder {
     /// Adds a line segment to the current sub-path.
     ///
     /// A sub-path must be in progress when this method is called.
-    fn line_to(&mut self, to: Point) -> EndpointId;
+    fn line_to(&mut self, to: Point, custom_attributes: Attributes) -> EndpointId;
 
     /// Adds a quadratic bézier curve to the current sub-path.
     ///
     /// A sub-path must be in progress when this method is called.
-    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point) -> EndpointId;
+    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, custom_attributes: Attributes) -> EndpointId;
 
     /// Adds a cubic bézier curve to the current sub-path.
     ///
     /// A sub-path must be in progress when this method is called.
-    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) -> EndpointId;
+    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, custom_attributes: Attributes) -> EndpointId;
 
     /// Hints at the builder that a certain number of endpoints and control
     /// points will be added.
@@ -182,21 +468,21 @@ pub trait PathBuilder {
     /// or `cubic_bezier_segment` according to the path event.
     ///
     /// The requirements for each method apply to the corresponding event.
-    fn path_event(&mut self, event: PathEvent) {
+    fn path_event(&mut self, event: PathEvent, attributes: Attributes) {
         match event {
             PathEvent::Begin { at } => {
-                self.begin(at);
+                self.begin(at, attributes);
             }
             PathEvent::Line { to, .. } => {
-                self.line_to(to);
+                self.line_to(to, attributes);
             }
             PathEvent::Quadratic { ctrl, to, .. } => {
-                self.quadratic_bezier_to(ctrl, to);
+                self.quadratic_bezier_to(ctrl, to, attributes);
             }
             PathEvent::Cubic {
                 ctrl1, ctrl2, to, ..
             } => {
-                self.cubic_bezier_to(ctrl1, ctrl2, to);
+                self.cubic_bezier_to(ctrl1, ctrl2, to, attributes);
             }
             PathEvent::End { close, .. } => {
                 self.end(close);
@@ -204,13 +490,36 @@ pub trait PathBuilder {
         }
     }
 
+    fn event(&mut self, event: Event<(Point, Attributes), Point>) {
+        match event {
+            Event::Begin { at } => {
+                self.begin(at.0, at.1);
+            }
+            Event::Line { to, .. } => {
+                self.line_to(to.0, to.1);
+            }
+            Event::Quadratic { ctrl, to, .. } => {
+                self.quadratic_bezier_to(ctrl, to.0, to.1);
+            }
+            Event::Cubic {
+                ctrl1, ctrl2, to, ..
+            } => {
+                self.cubic_bezier_to(ctrl1, ctrl2, to.0, to.1);
+            }
+            Event::End { close, .. } => {
+                self.end(close);
+            }
+        }
+    }
+
+    // TODO add equivalent with attributes
     /// Adds events from an iterator.
-    fn extend<Evts>(&mut self, events: Evts)
+    fn extend<Evts>(&mut self, events: Evts, attributes: Attributes)
     where
         Evts: IntoIterator<Item = PathEvent>,
     {
         for evt in events.into_iter() {
-            self.path_event(evt)
+            self.path_event(evt, attributes)
         }
     }
 
@@ -218,16 +527,16 @@ pub trait PathBuilder {
     ///
     /// There must be no sub-path in progress when this method is called.
     /// No sub-path is in progress after the method is called.
-    fn add_polygon(&mut self, polygon: Polygon<Point>) {
+    fn add_polygon(&mut self, polygon: Polygon<Point>, attributes: Attributes) {
         if polygon.points.is_empty() {
             return;
         }
 
         self.reserve(polygon.points.len(), 0);
 
-        self.begin(polygon.points[0]);
+        self.begin(polygon.points[0], attributes);
         for p in &polygon.points[1..] {
-            self.line_to(*p);
+            self.line_to(*p, attributes);
         }
 
         self.end(polygon.closed);
@@ -237,8 +546,8 @@ pub trait PathBuilder {
     ///
     /// There must be no sub-path in progress when this method is called.
     /// No sub-path is in progress after the method is called.
-    fn add_point(&mut self, at: Point) -> EndpointId {
-        let id = self.begin(at);
+    fn add_point(&mut self, at: Point, attributes: Attributes) -> EndpointId {
+        let id = self.begin(at, attributes);
         self.end(false);
 
         id
@@ -248,9 +557,9 @@ pub trait PathBuilder {
     ///
     /// There must be no sub-path in progress when this method is called.
     /// No sub-path is in progress after the method is called.
-    fn add_line_segment(&mut self, line: &LineSegment<f32>) -> (EndpointId, EndpointId) {
-        let a = self.begin(line.from);
-        let b = self.line_to(line.to);
+    fn add_line_segment(&mut self, line: &LineSegment<f32>, attributes: Attributes) -> (EndpointId, EndpointId) {
+        let a = self.begin(line.from, attributes);
+        let b = self.line_to(line.to, attributes);
         self.end(false);
 
         (a, b)
@@ -260,7 +569,7 @@ pub trait PathBuilder {
     ///
     /// There must be no sub-path in progress when this method is called.
     /// No sub-path is in progress after the method is called.
-    fn add_ellipse(&mut self, center: Point, radii: Vector, x_rotation: Angle, winding: Winding) {
+    fn add_ellipse(&mut self, center: Point, radii: Vector, x_rotation: Angle, winding: Winding, attributes: Attributes) {
         let dir = match winding {
             Winding::Positive => 1.0,
             Winding::Negative => -1.0,
@@ -275,9 +584,9 @@ pub trait PathBuilder {
             sweep_angle: Angle::radians(2.0 * PI) * dir,
         };
 
-        self.begin(arc.sample(0.0));
+        self.begin(arc.sample(0.0), attributes);
         arc.for_each_quadratic_bezier(&mut |curve| {
-            self.quadratic_bezier_to(curve.ctrl, curve.to);
+            self.quadratic_bezier_to(curve.ctrl, curve.to, attributes);
         });
         self.end(true);
     }
@@ -286,37 +595,43 @@ pub trait PathBuilder {
     ///
     /// There must be no sub-path in progress when this method is called.
     /// No sub-path is in progress after the method is called.
-    fn add_circle(&mut self, center: Point, radius: f32, winding: Winding)
+    fn add_circle(&mut self, center: Point, radius: f32, winding: Winding, attributes: Attributes)
     where
         Self: Sized,
     {
-        add_circle(self, center, radius, winding);
+        add_circle(self, center, radius, winding, attributes);
     }
 
     /// Adds a sub-path containing a rectangle.
     ///
     /// There must be no sub-path in progress when this method is called.
     /// No sub-path is in progress after the method is called.
-    fn add_rectangle(&mut self, rect: &Rect, winding: Winding) {
+    fn add_rectangle(&mut self, rect: &Box2D, winding: Winding, attributes: Attributes) {
         match winding {
-            Winding::Positive => self.add_polygon(Polygon {
-                points: &[
-                    rect.min(),
-                    point(rect.max_x(), rect.min_y()),
-                    rect.max(),
-                    point(rect.min_x(), rect.max_y()),
-                ],
-                closed: true,
-            }),
-            Winding::Negative => self.add_polygon(Polygon {
-                points: &[
-                    rect.min(),
-                    point(rect.min_x(), rect.max_y()),
-                    rect.max(),
-                    point(rect.max_x(), rect.min_y()),
-                ],
-                closed: true,
-            }),
+            Winding::Positive => self.add_polygon(
+                Polygon {
+                    points: &[
+                        rect.min,
+                        point(rect.max.x, rect.min.y),
+                        rect.max,
+                        point(rect.min.x, rect.max.y),
+                    ],
+                    closed: true,
+                },
+                attributes,
+            ),
+            Winding::Negative => self.add_polygon(
+                Polygon {
+                    points: &[
+                        rect.min,
+                        point(rect.min.x, rect.max.y),
+                        rect.max,
+                        point(rect.max.x, rect.min.y),
+                    ],
+                    closed: true,
+                },
+                attributes,
+            ),
         };
     }
 
@@ -324,11 +639,17 @@ pub trait PathBuilder {
     ///
     /// There must be no sub-path in progress when this method is called.
     /// No sub-path is in progress after the method is called.
-    fn add_rounded_rectangle(&mut self, rect: &Rect, radii: &BorderRadii, winding: Winding)
+    fn add_rounded_rectangle(
+        &mut self,
+        rect: &Box2D,
+        radii: &BorderRadii,
+        winding: Winding,
+        custom_attributes: Attributes,
+    )
     where
         Self: Sized,
     {
-        add_rounded_rectangle(self, rect, radii, winding);
+        add_rounded_rectangle(self, rect, radii, winding, custom_attributes);
     }
 
     /// Returns a builder that approximates all curves with sequences of line segments.
@@ -571,7 +892,7 @@ pub trait Build {
     /// The type of object that is created by this builder.
     type PathType;
 
-    /// Builds a path object and resets the builder so that it can be used again.
+    /// Builds a path object, consuming the builder.
     fn build(self) -> Self::PathType;
 }
 
@@ -580,6 +901,8 @@ pub struct Flattened<Builder> {
     builder: Builder,
     current_position: Point,
     tolerance: f32,
+    prev_attributes: Vec<f32>,
+    attribute_buffer: Vec<f32>,
 }
 
 impl<Builder: Build> Build for Flattened<Builder> {
@@ -591,45 +914,55 @@ impl<Builder: Build> Build for Flattened<Builder> {
 }
 
 impl<Builder: PathBuilder> PathBuilder for Flattened<Builder> {
-    fn begin(&mut self, at: Point) -> EndpointId {
+    fn num_attributes(&self) -> usize { self.builder.num_attributes() }
+
+    fn begin(&mut self, at: Point, attributes: Attributes) -> EndpointId {
         self.current_position = at;
-        self.builder.begin(at)
+        self.builder.begin(at, attributes)
     }
 
     fn end(&mut self, close: bool) {
         self.builder.end(close)
     }
 
-    fn line_to(&mut self, to: Point) -> EndpointId {
-        let id = self.builder.line_to(to);
+    fn line_to(&mut self, to: Point, attributes: Attributes) -> EndpointId {
+        let id = self.builder.line_to(to, attributes);
         self.current_position = to;
-
+        self.prev_attributes.copy_from_slice(attributes.as_slice());
         id
     }
 
-    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point) -> EndpointId {
+    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, attributes: Attributes) -> EndpointId {
         let id = crate::private::flatten_quadratic_bezier(
             self.tolerance,
             self.current_position,
             ctrl,
             to,
-            self,
+            attributes,
+            Attributes(&self.prev_attributes),
+            &mut self.builder,
+            &mut self.attribute_buffer,
         );
         self.current_position = to;
+        self.prev_attributes.copy_from_slice(attributes.as_slice());
 
         id
     }
 
-    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) -> EndpointId {
+    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, attributes: Attributes) -> EndpointId {
         let id = crate::private::flatten_cubic_bezier(
             self.tolerance,
             self.current_position,
             ctrl1,
             ctrl2,
             to,
-            self,
+            attributes,
+            Attributes(&self.prev_attributes),
+            &mut self.builder,
+            &mut self.attribute_buffer,
         );
         self.current_position = to;
+        self.prev_attributes.copy_from_slice(attributes.as_slice());
 
         id
     }
@@ -641,10 +974,13 @@ impl<Builder: PathBuilder> PathBuilder for Flattened<Builder> {
 
 impl<Builder: PathBuilder> Flattened<Builder> {
     pub fn new(builder: Builder, tolerance: f32) -> Flattened<Builder> {
+        let n = builder.num_attributes();
         Flattened {
             builder,
             current_position: point(0.0, 0.0),
             tolerance,
+            prev_attributes: vec![0.0; n],
+            attribute_buffer: vec![0.0; n],
         }
     }
 
@@ -692,9 +1028,11 @@ where
     Builder: PathBuilder,
     Transform: Transformation<f32>,
 {
+    fn num_attributes(&self) -> usize { self.builder.num_attributes() }
+
     #[inline]
-    fn begin(&mut self, at: Point) -> EndpointId {
-        self.builder.begin(self.transform.transform_point(at))
+    fn begin(&mut self, at: Point, attributes: Attributes) -> EndpointId {
+        self.builder.begin(self.transform.transform_point(at), attributes)
     }
 
     #[inline]
@@ -703,24 +1041,26 @@ where
     }
 
     #[inline]
-    fn line_to(&mut self, to: Point) -> EndpointId {
-        self.builder.line_to(self.transform.transform_point(to))
+    fn line_to(&mut self, to: Point, attributes: Attributes) -> EndpointId {
+        self.builder.line_to(self.transform.transform_point(to), attributes)
     }
 
     #[inline]
-    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point) -> EndpointId {
+    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, attributes: Attributes) -> EndpointId {
         self.builder.quadratic_bezier_to(
             self.transform.transform_point(ctrl),
             self.transform.transform_point(to),
+            attributes,
         )
     }
 
     #[inline]
-    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) -> EndpointId {
+    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, attributes: Attributes) -> EndpointId {
         self.builder.cubic_bezier_to(
             self.transform.transform_point(ctrl1),
             self.transform.transform_point(ctrl2),
             self.transform.transform_point(to),
+            attributes,
         )
     }
 
@@ -740,10 +1080,12 @@ pub struct WithSvg<Builder: PathBuilder> {
     last_cmd: Verb,
     need_moveto: bool,
     is_empty: bool,
+    attribute_buffer: Vec<f32>,
 }
 
 impl<Builder: PathBuilder> WithSvg<Builder> {
     pub fn new(builder: Builder) -> Self {
+        let attribute_buffer = vec![0.0; builder.num_attributes()];
         WithSvg {
             builder,
             first_position: point(0.0, 0.0),
@@ -752,6 +1094,7 @@ impl<Builder: PathBuilder> WithSvg<Builder> {
             need_moveto: true,
             is_empty: true,
             last_cmd: Verb::End,
+            attribute_buffer,
         }
     }
 
@@ -780,7 +1123,7 @@ impl<Builder: PathBuilder> WithSvg<Builder> {
     pub fn move_to(&mut self, to: Point) -> EndpointId {
         self.end_if_needed();
 
-        let id = self.builder.begin(to);
+        let id = self.builder.begin(to, Attributes(&self.attribute_buffer));
 
         self.is_empty = false;
         self.need_moveto = false;
@@ -799,7 +1142,7 @@ impl<Builder: PathBuilder> WithSvg<Builder> {
         self.current_position = to;
         self.last_cmd = Verb::LineTo;
 
-        self.builder.line_to(to)
+        self.builder.line_to(to, Attributes(&self.attribute_buffer))
     }
 
     pub fn close(&mut self) {
@@ -839,7 +1182,7 @@ impl<Builder: PathBuilder> WithSvg<Builder> {
         self.last_cmd = Verb::QuadraticTo;
         self.last_ctrl = ctrl;
 
-        self.builder.quadratic_bezier_to(ctrl, to)
+        self.builder.quadratic_bezier_to(ctrl, to, Attributes(&self.attribute_buffer))
     }
 
     pub fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) -> EndpointId {
@@ -851,7 +1194,7 @@ impl<Builder: PathBuilder> WithSvg<Builder> {
         self.last_cmd = Verb::CubicTo;
         self.last_ctrl = ctrl2;
 
-        self.builder.cubic_bezier_to(ctrl1, ctrl2, to)
+        self.builder.cubic_bezier_to(ctrl1, ctrl2, to, Attributes(&self.attribute_buffer))
     }
 
     pub fn arc(&mut self, center: Point, radii: Vector, sweep_angle: Angle, x_rotation: Angle) {
@@ -886,11 +1229,11 @@ impl<Builder: PathBuilder> WithSvg<Builder> {
         if self.need_moveto {
             self.move_to(arc_start);
         } else if (arc_start - self.current_position).square_length() < 0.01 {
-            self.builder.line_to(arc_start);
+            self.builder.line_to(arc_start, Attributes(&self.attribute_buffer));
         }
 
         arc.for_each_quadratic_bezier(&mut |curve| {
-            self.builder.quadratic_bezier_to(curve.ctrl, curve.to);
+            self.builder.quadratic_bezier_to(curve.ctrl, curve.to, Attributes(&self.attribute_buffer));
             self.current_position = curve.to;
         });
     }
@@ -1094,6 +1437,7 @@ fn add_circle<Builder: PathBuilder>(
     center: Point,
     radius: f32,
     winding: Winding,
+    attributes: Attributes,
 ) {
     let radius = radius.abs();
     let dir = match winding {
@@ -1105,27 +1449,27 @@ fn add_circle<Builder: PathBuilder>(
     const CONSTANT_FACTOR: f32 = 0.55191505;
     let d = radius * CONSTANT_FACTOR;
 
-    builder.begin(center + vector(-radius, 0.0));
+    builder.begin(center + vector(-radius, 0.0), attributes);
 
     let ctrl_0 = center + vector(-radius, -d * dir);
     let ctrl_1 = center + vector(-d, -radius * dir);
     let mid = center + vector(0.0, -radius * dir);
-    builder.cubic_bezier_to(ctrl_0, ctrl_1, mid);
+    builder.cubic_bezier_to(ctrl_0, ctrl_1, mid, attributes);
 
     let ctrl_0 = center + vector(d, -radius * dir);
     let ctrl_1 = center + vector(radius, -d * dir);
     let mid = center + vector(radius, 0.0);
-    builder.cubic_bezier_to(ctrl_0, ctrl_1, mid);
+    builder.cubic_bezier_to(ctrl_0, ctrl_1, mid, attributes);
 
     let ctrl_0 = center + vector(radius, d * dir);
     let ctrl_1 = center + vector(d, radius * dir);
     let mid = center + vector(0.0, radius * dir);
-    builder.cubic_bezier_to(ctrl_0, ctrl_1, mid);
+    builder.cubic_bezier_to(ctrl_0, ctrl_1, mid, attributes);
 
     let ctrl_0 = center + vector(-d, radius * dir);
     let ctrl_1 = center + vector(-radius, d * dir);
     let mid = center + vector(-radius, 0.0);
-    builder.cubic_bezier_to(ctrl_0, ctrl_1, mid);
+    builder.cubic_bezier_to(ctrl_0, ctrl_1, mid, attributes);
 
     builder.close();
 }
@@ -1133,16 +1477,17 @@ fn add_circle<Builder: PathBuilder>(
 /// Tessellate the stroke for an axis-aligned rounded rectangle.
 fn add_rounded_rectangle<Builder: PathBuilder>(
     builder: &mut Builder,
-    rect: &Rect,
+    rect: &Box2D,
     radii: &BorderRadii,
     winding: Winding,
+    attributes: Attributes,
 ) {
-    let w = rect.size.width;
-    let h = rect.size.height;
-    let x_min = rect.min_x();
-    let y_min = rect.min_y();
-    let x_max = rect.max_x();
-    let y_max = rect.max_y();
+    let w = rect.width();
+    let h = rect.height();
+    let x_min = rect.min.x;
+    let y_min = rect.min.y;
+    let x_max = rect.max.x;
+    let y_max = rect.max.y;
     let min_wh = w.min(h);
     let mut tl = radii.top_left.abs().min(min_wh);
     let mut tr = radii.top_right.abs().min(min_wh);
@@ -1206,38 +1551,38 @@ fn add_rounded_rectangle<Builder: PathBuilder>(
     ];
 
     if winding == Winding::Positive {
-        builder.begin(points[0]);
+        builder.begin(points[0], attributes);
         if tl > 0.0 {
-            builder.cubic_bezier_to(points[1], points[2], points[3]);
+            builder.cubic_bezier_to(points[1], points[2], points[3], attributes);
         }
-        builder.line_to(points[4]);
+        builder.line_to(points[4], attributes);
         if tl > 0.0 {
-            builder.cubic_bezier_to(points[5], points[6], points[7]);
+            builder.cubic_bezier_to(points[5], points[6], points[7], attributes);
         }
-        builder.line_to(points[8]);
+        builder.line_to(points[8], attributes);
         if br > 0.0 {
-            builder.cubic_bezier_to(points[9], points[10], points[11]);
+            builder.cubic_bezier_to(points[9], points[10], points[11], attributes);
         }
-        builder.line_to(points[12]);
+        builder.line_to(points[12], attributes);
         if bl > 0.0 {
-            builder.cubic_bezier_to(points[13], points[14], points[15]);
+            builder.cubic_bezier_to(points[13], points[14], points[15], attributes);
         }
     } else {
-        builder.begin(points[15]);
+        builder.begin(points[15], attributes);
         if bl > 0.0 {
-            builder.cubic_bezier_to(points[14], points[13], points[12]);
+            builder.cubic_bezier_to(points[14], points[13], points[12], attributes);
         }
-        builder.line_to(points[11]);
+        builder.line_to(points[11], attributes);
         if br > 0.0 {
-            builder.cubic_bezier_to(points[10], points[9], points[8]);
+            builder.cubic_bezier_to(points[10], points[9], points[8], attributes);
         }
-        builder.line_to(points[7]);
+        builder.line_to(points[7], attributes);
         if tl > 0.0 {
-            builder.cubic_bezier_to(points[6], points[5], points[4]);
+            builder.cubic_bezier_to(points[6], points[5], points[4], attributes);
         }
-        builder.line_to(points[3]);
+        builder.line_to(points[3], attributes);
         if tl > 0.0 {
-            builder.cubic_bezier_to(points[2], points[1], points[0]);
+            builder.cubic_bezier_to(points[2], points[1], points[0], attributes);
         }
     }
     builder.end(true);
@@ -1362,7 +1707,7 @@ fn svg_builder_arc_to_update_position() {
 #[test]
 fn issue_650() {
     use std::f32::consts::PI;
-    let mut builder = crate::path::Builder::new().with_svg();
+    let mut builder = crate::path::Path::builder().with_svg();
     builder.arc(
         point(0.0, 0.0),
         vector(50.0, 50.0),

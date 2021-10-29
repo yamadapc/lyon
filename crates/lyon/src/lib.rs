@@ -77,8 +77,8 @@
 //! to obtain the fill tessellation a rectangle with rounded corners:
 //!
 //! ```
-//! use lyon::math::{rect, Point};
-//! use lyon::path::{builder::*, Winding};
+//! use lyon::math::{Box2D, Point, point};
+//! use lyon::path::{Winding, builder::BorderRadii};
 //! use lyon::tessellation::{FillTessellator, FillOptions, VertexBuffers};
 //! use lyon::tessellation::geometry_builder::simple_builder;
 //!
@@ -94,14 +94,14 @@
 //!     );
 //!
 //!     builder.add_rounded_rectangle(
-//!         &rect(0.0, 0.0, 100.0, 50.0),
+//!         &Box2D { min: point(0.0, 0.0), max: point(100.0, 50.0) },
 //!         &BorderRadii {
 //!             top_left: 10.0,
 //!             top_right: 5.0,
 //!             bottom_left: 20.0,
 //!             bottom_right: 25.0,
 //!         },
-//!         Winding::Positive
+//!         Winding::Positive,
 //!     );
 //!
 //!     builder.build();

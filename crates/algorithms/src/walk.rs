@@ -12,15 +12,15 @@
 //! ## Example
 //!
 //! ```
-//! use lyon_algorithms::walk::{RegularPattern, walk_along_path};
+//! use lyon_algorithms::walk::{RegularPattern, walk_along_path, WalkerEvent};
 //! use lyon_algorithms::path::PathSlice;
 //! use lyon_algorithms::path::iterator::*;
 //! use lyon_algorithms::path::math::Point;
 //!
 //! fn dots_along_path(path: PathSlice, dots: &mut Vec<Point>) {
 //!     let mut pattern = RegularPattern {
-//!         callback: &mut |position, _tangent, _distance| {
-//!             dots.push(position);
+//!         callback: &mut |event: WalkerEvent| {
+//!             dots.push(event.position);
 //!             true // Return true to continue walking the path.
 //!         },
 //!         // Invoke the callback above at a regular interval of 3 units.
@@ -42,22 +42,30 @@
 use crate::geom::{CubicBezierSegment, QuadraticBezierSegment};
 use crate::math::*;
 use crate::path::builder::*;
-use crate::path::{EndpointId, PathEvent};
+use crate::path::{EndpointId, PathEvent, Attributes};
 
 use std::f32;
 
 /// Walks along the path staring at offset `start` and applies a `Pattern`.
 pub fn walk_along_path<Iter>(path: Iter, start: f32, pattern: &mut dyn Pattern)
 where
-    Iter: Iterator<Item = PathEvent>,
+    Iter: IntoIterator<Item = PathEvent>,
 {
     let mut walker = PathWalker::new(start, pattern);
     for evt in path {
         walker.path_event(evt);
-        if walker.done {
+        if walker.inner().done {
             return;
         }
     }
+}
+
+#[derive(Debug)]
+pub struct WalkerEvent<'l> {
+    pub position: Point,
+    pub tangent: Vector,
+    pub distance: f32,
+    pub attributes: Attributes<'l>,
 }
 
 /// Types implementing the `Pattern` can be used to walk along a path
@@ -69,13 +77,13 @@ where
 ///
 /// See the `RegularPattern` and `RepeatedPattern` implementations.
 /// This trait is also implemented for all functions/closures with signature
-/// `FnMut(Point, Vector, f32) -> Option<f32>`.
+/// `FnMut(WalkerEvent) -> Option<f32>`.
 pub trait Pattern {
     /// This method is invoked at each step along the path.
     ///
     /// If this method returns None, path walking stops. Otherwise the returned
     /// value is the distance along the path to the next element in the pattern.
-    fn next(&mut self, position: Point, tangent: Vector, distance: f32) -> Option<f32>;
+    fn next(&mut self, event: WalkerEvent) -> Option<f32>;
 
     /// Invoked at the start each sub-path.
     ///
@@ -98,12 +106,20 @@ pub struct PathWalker<'l> {
     first: Point,
     need_moveto: bool,
     done: bool,
+    prev_attributes: Vec<f32>,
+    attribute_buffer: Vec<f32>,
+    first_attributes: Vec<f32>,
+    num_attributes: usize,
 
     pattern: &'l mut dyn Pattern,
 }
 
 impl<'l> PathWalker<'l> {
-    pub fn new(start: f32, pattern: &'l mut dyn Pattern) -> PathWalker<'l> {
+    pub fn new(start: f32, pattern: &'l mut dyn Pattern) -> NoAttributes<Self> {
+        NoAttributes::wrap(Self::with_attributes(0, start, pattern))
+    }
+
+    pub fn with_attributes(num_attributes: usize, start: f32, pattern: &'l mut dyn Pattern) -> Self {
         let start = f32::max(start, 0.0);
         PathWalker {
             prev: point(0.0, 0.0),
@@ -114,12 +130,60 @@ impl<'l> PathWalker<'l> {
             need_moveto: true,
             done: false,
             pattern,
+            prev_attributes: vec![0.0; num_attributes],
+            attribute_buffer: vec![0.0; num_attributes],
+            first_attributes: vec![0.0; num_attributes],
+            num_attributes,
         }
     }
-}
 
-impl<'l> PathBuilder for PathWalker<'l> {
-    fn begin(&mut self, to: Point) -> EndpointId {
+    fn edge(&mut self, to: Point, t: f32, attributes: Attributes) {
+        debug_assert!(!self.need_moveto);
+
+        let v = to - self.prev;
+        let d = v.length();
+
+        if d < 1e-5 {
+            return;
+        }
+
+        let tangent = v / d;
+
+        let mut distance = self.leftover + d;
+        while distance >= self.next_distance {
+            if self.num_attributes > 0 {
+                let t2 = t * self.next_distance / distance;
+                for i in 0..self.num_attributes {
+                    self.attribute_buffer[i] = self.prev_attributes[i] * (1.0 - t2) + attributes[i] * t2;
+                }
+            }
+            let position = self.prev + tangent * (self.next_distance - self.leftover);
+            self.prev = position;
+            self.leftover = 0.0;
+            self.advancement += self.next_distance;
+            distance -= self.next_distance;
+
+            let event = WalkerEvent {
+                position,
+                tangent,
+                distance: self.advancement,
+                attributes: Attributes(&self.attribute_buffer[..]),
+            };
+            if let Some(distance) = self.pattern.next(event) {
+                self.next_distance = distance;
+            } else {
+                self.done = true;
+                return;
+            }
+        }
+
+        self.prev = to;
+        self.leftover = distance;
+    }
+
+    pub fn num_attributes(&self) -> usize { self.num_attributes }
+
+    pub fn begin(&mut self, to: Point, attributes: Attributes) -> EndpointId {
         self.need_moveto = false;
         self.first = to;
         self.prev = to;
@@ -130,78 +194,95 @@ impl<'l> PathBuilder for PathWalker<'l> {
             self.done = true;
         }
 
+        self.prev_attributes.copy_from_slice(attributes.as_slice());
+        self.first_attributes.copy_from_slice(attributes.as_slice());
+
         EndpointId::INVALID
     }
 
-    fn line_to(&mut self, to: Point) -> EndpointId {
+    pub fn line_to(&mut self, to: Point, attributes: Attributes) -> EndpointId {
         debug_assert!(!self.need_moveto);
 
-        let v = to - self.prev;
-        let d = v.length();
+        self.edge(to, 1.0, attributes);
 
-        if d < 1e-5 {
-            return EndpointId::INVALID;
-        }
-
-        let tangent = v / d;
-
-        let mut distance = self.leftover + d;
-        while distance >= self.next_distance {
-            let position = self.prev + tangent * (self.next_distance - self.leftover);
-            self.prev = position;
-            self.leftover = 0.0;
-            self.advancement += self.next_distance;
-            distance -= self.next_distance;
-
-            if let Some(distance) = self.pattern.next(position, tangent, self.advancement) {
-                self.next_distance = distance;
-            } else {
-                self.done = true;
-                return EndpointId::INVALID;
-            }
-        }
-
-        self.prev = to;
-        self.leftover = distance;
+        self.prev_attributes.copy_from_slice(attributes.as_slice());
 
         EndpointId::INVALID
     }
 
-    fn end(&mut self, close: bool) {
+    pub fn end(&mut self, close: bool) {
         if close {
             let first = self.first;
-            self.line_to(first);
+            let attributes = std::mem::take(&mut self.first_attributes);
+            self.edge(first, 1.0, Attributes(&attributes));
+            self.first_attributes = attributes;
             self.need_moveto = true;
         }
     }
 
-    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point) -> EndpointId {
+    pub fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, attributes: Attributes) -> EndpointId {
         let curve = QuadraticBezierSegment {
             from: self.prev,
             ctrl,
             to,
         };
-        curve.for_each_flattened(0.01, &mut |p| {
-            self.line_to(p);
+        curve.for_each_flattened_with_t(0.01, &mut |p, t| {
+            self.edge(p, t, attributes);
         });
+
+        self.prev_attributes.copy_from_slice(attributes.as_slice());
 
         EndpointId::INVALID
     }
 
-    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) -> EndpointId {
+    pub fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, attributes: Attributes) -> EndpointId {
         let curve = CubicBezierSegment {
             from: self.prev,
             ctrl1,
             ctrl2,
             to,
         };
-        curve.for_each_flattened(0.01, &mut |p| {
-            self.line_to(p);
+
+        curve.for_each_flattened_with_t(0.01, &mut |p, t| {
+            self.edge(p, t, attributes);
         });
+
+        self.prev_attributes.copy_from_slice(attributes.as_slice());
 
         EndpointId::INVALID
     }
 }
+
+impl<'l> PathBuilder for PathWalker<'l> {
+    fn num_attributes(&self) -> usize { self.num_attributes }
+
+    fn begin(&mut self, to: Point, attributes: Attributes) -> EndpointId {
+        self.begin(to, attributes)
+    }
+
+    fn line_to(&mut self, to: Point, attributes: Attributes) -> EndpointId {
+        self.line_to(to, attributes)
+    }
+
+    fn end(&mut self, close: bool) {
+        self.end(close)
+    }
+
+    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, attributes: Attributes) -> EndpointId {
+        self.quadratic_bezier_to(ctrl, to, attributes)
+    }
+
+    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, attributes: Attributes) -> EndpointId {
+        self.cubic_bezier_to(ctrl1, ctrl2, to, attributes)
+    }
+}
+
+impl<'l> Build for PathWalker<'l> {
+    type PathType = ();
+
+    fn build(self) -> () {}
+}
+
 
 /// A simple pattern that invokes a callback at regular intervals.
 ///
@@ -215,11 +296,11 @@ pub struct RegularPattern<Cb> {
 
 impl<Cb> Pattern for RegularPattern<Cb>
 where
-    Cb: FnMut(Point, Vector, f32) -> bool,
+    Cb: FnMut(WalkerEvent) -> bool,
 {
     #[inline]
-    fn next(&mut self, position: Point, tangent: Vector, distance: f32) -> Option<f32> {
-        if !(self.callback)(position, tangent, distance) {
+    fn next(&mut self, event: WalkerEvent) -> Option<f32> {
+        if !(self.callback)(event) {
             return None;
         }
         Some(self.interval)
@@ -241,11 +322,11 @@ pub struct RepeatedPattern<'l, Cb> {
 
 impl<'l, Cb> Pattern for RepeatedPattern<'l, Cb>
 where
-    Cb: FnMut(Point, Vector, f32) -> bool,
+    Cb: FnMut(WalkerEvent) -> bool,
 {
     #[inline]
-    fn next(&mut self, position: Point, tangent: Vector, distance: f32) -> Option<f32> {
-        if !(self.callback)(position, tangent, distance) {
+    fn next(&mut self, event: WalkerEvent) -> Option<f32> {
+        if !(self.callback)(event) {
             return None;
         }
         let idx = self.index % self.intervals.len();
@@ -256,11 +337,11 @@ where
 
 impl<Cb> Pattern for Cb
 where
-    Cb: FnMut(Point, Vector, f32) -> Option<f32>,
+    Cb: FnMut(WalkerEvent) -> Option<f32>,
 {
     #[inline]
-    fn next(&mut self, position: Point, tangent: Vector, distance: f32) -> Option<f32> {
-        (self)(position, tangent, distance)
+    fn next(&mut self, event: WalkerEvent) -> Option<f32> {
+        (self)(event)
     }
 }
 
@@ -285,11 +366,10 @@ fn walk_square() {
     let mut i = 0;
     let mut pattern = RegularPattern {
         interval: 2.0,
-        callback: |pos, n, d| {
-            println!("p:{:?} n:{:?} d:{:?}", pos, n, d);
-            assert_eq!(pos, expected[i].0);
-            assert_eq!(n, expected[i].1);
-            assert_eq!(d, expected[i].2);
+        callback: |event: WalkerEvent| {
+            assert_eq!(event.position, expected[i].0);
+            assert_eq!(event.tangent, expected[i].1);
+            assert_eq!(event.distance, expected[i].2);
             i += 1;
             true
         },
@@ -319,11 +399,10 @@ fn walk_with_leftover() {
     let mut i = 0;
     let mut pattern = RegularPattern {
         interval: 3.0,
-        callback: |pos, n, d| {
-            println!("p:{:?} n:{:?} d:{:?}", pos, n, d);
-            assert_eq!(pos, expected[i].0);
-            assert_eq!(n, expected[i].1);
-            assert_eq!(d, expected[i].2);
+        callback: |event: WalkerEvent| {
+            assert_eq!(event.position, expected[i].0);
+            assert_eq!(event.tangent, expected[i].1);
+            assert_eq!(event.distance, expected[i].2);
             i += 1;
             true
         },
@@ -342,7 +421,7 @@ fn walk_with_leftover() {
 fn walk_starting_after() {
     // With a starting distance that is greater than the path, the
     // callback should never be called.
-    let cb = &mut |_, _, _| -> Option<f32> { panic!() };
+    let cb = &mut |_event: WalkerEvent| -> Option<f32> { panic!() };
     let mut walker = PathWalker::new(10.0, cb);
 
     walker.begin(point(0.0, 0.0));
@@ -355,7 +434,7 @@ fn walk_abort_early() {
     let mut callback_counter = 0;
     let mut pattern = RegularPattern {
         interval: 3.0,
-        callback: |_pos, _n, _d| {
+        callback: |_event: WalkerEvent| {
             callback_counter += 1;
             false
         },

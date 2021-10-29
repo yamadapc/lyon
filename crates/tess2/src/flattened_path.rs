@@ -1,19 +1,25 @@
 use crate::math::*;
 use crate::path::builder::*;
 use crate::path::private::{flatten_cubic_bezier, flatten_quadratic_bezier};
-use crate::path::EndpointId;
+use crate::path::{EndpointId, Attributes};
 
 use std::ops::Range;
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 struct SubPathInfo {
     range: Range<usize>,
     is_closed: bool,
 }
 
 /// A path data structure for pre-flattened paths and polygons.
-#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+#[cfg_attr(
+    feature = "serialization",
+    derive(serde::Serialize, serde::Deserialize)
+)]
 #[derive(Clone, Default)]
 pub struct FlattenedPath {
     points: Vec<Point>,
@@ -171,7 +177,9 @@ impl Build for Builder {
 }
 
 impl PathBuilder for Builder {
-    fn begin(&mut self, to: Point) -> EndpointId {
+    fn num_attributes(&self) -> usize { 0 }
+
+    fn begin(&mut self, to: Point, _: Attributes) -> EndpointId {
         nan_check(to);
         let sp_end = self.points.len();
         if self.sp_start != sp_end {
@@ -186,7 +194,7 @@ impl PathBuilder for Builder {
         EndpointId(sp_end as u32)
     }
 
-    fn line_to(&mut self, to: Point) -> EndpointId {
+    fn line_to(&mut self, to: Point, _: Attributes) -> EndpointId {
         nan_check(to);
         let id = EndpointId(self.points.len() as u32);
         self.points.push(to);
@@ -205,18 +213,30 @@ impl PathBuilder for Builder {
         self.sp_start = sp_end;
     }
 
-    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point) -> EndpointId {
-        flatten_quadratic_bezier(self.tolerance, self.current_position(), ctrl, to, self)
+    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, _: Attributes) -> EndpointId {
+        flatten_quadratic_bezier(
+            self.tolerance,
+            self.current_position(),
+            ctrl,
+            to,
+            Attributes::NONE,
+            Attributes::NONE,
+            self,
+            &mut []
+        )
     }
 
-    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point) -> EndpointId {
+    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, _: Attributes) -> EndpointId {
         flatten_cubic_bezier(
             self.tolerance,
             self.current_position(),
             ctrl1,
             ctrl2,
             to,
+            Attributes::NONE,
+            Attributes::NONE,
             self,
+            &mut []
         )
     }
 }

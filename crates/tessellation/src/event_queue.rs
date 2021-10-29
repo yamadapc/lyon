@@ -55,7 +55,7 @@ impl EventQueue {
         EventQueue {
             events: Vec::new(),
             edge_data: Vec::new(),
-            first: 0,
+            first: INVALID_EVENT_ID,
             sorted: false,
         }
     }
@@ -72,7 +72,7 @@ impl EventQueue {
     pub fn reset(&mut self) {
         self.events.clear();
         self.edge_data.clear();
-        self.first = 0;
+        self.first = INVALID_EVENT_ID;
         self.sorted = false;
     }
 
@@ -81,10 +81,11 @@ impl EventQueue {
     /// The tolerance threshold is used for curve flattening approximation. See the
     /// [Flattening and tolerance](index.html#flattening-and-tolerance) section of the
     /// crate documentation.
-    pub fn from_path(tolerance: f32, path: impl Iterator<Item = PathEvent>) -> Self {
+    pub fn from_path(tolerance: f32, path: impl IntoIterator<Item = PathEvent>) -> Self {
+        let path = path.into_iter();
         let (min, max) = path.size_hint();
         let capacity = max.unwrap_or(min);
-        let mut builder = EventQueueBuilder::with_capacity(capacity);
+        let mut builder = EventQueueBuilder::with_capacity(capacity, tolerance);
         builder.set_path(tolerance, Orientation::Vertical, path);
 
         builder.build()
@@ -100,19 +101,19 @@ impl EventQueue {
     pub fn from_path_with_ids(
         tolerance: f32,
         sweep_orientation: Orientation,
-        path: impl Iterator<Item = IdEvent>,
+        path: impl IntoIterator<Item = IdEvent>,
         positions: &impl PositionStore,
     ) -> Self {
+        let path = path.into_iter();
         let (min, max) = path.size_hint();
         let capacity = max.unwrap_or(min);
-        let mut builder = EventQueueBuilder::with_capacity(capacity);
+        let mut builder = EventQueueBuilder::with_capacity(capacity, tolerance);
         builder.set_path_with_ids(tolerance, sweep_orientation, path, positions);
 
         builder.build()
     }
 
-    // TODO: this should take the tolerance as parameter.
-    pub fn into_builder(mut self) -> EventQueueBuilder {
+    pub fn into_builder(mut self, tolerance: f32) -> EventQueueBuilder {
         self.reset();
         EventQueueBuilder {
             queue: self,
@@ -120,7 +121,7 @@ impl EventQueue {
             prev: point(f32::NAN, f32::NAN),
             second: point(f32::NAN, f32::NAN),
             nth: 0,
-            tolerance: 0.1,
+            tolerance,
             prev_endpoint_id: EndpointId(std::u32::MAX),
             validator: DebugValidator::new(),
         }
@@ -274,7 +275,7 @@ impl EventQueue {
 
     pub(crate) fn clear(&mut self) {
         self.events.clear();
-        self.first = 0;
+        self.first = INVALID_EVENT_ID;
         self.sorted = false;
     }
 
@@ -295,7 +296,8 @@ impl EventQueue {
 
     // TODO: we should be able to simplify this and just compare with INVALID_EVENT_ID
     pub(crate) fn valid_id(&self, id: TessEventId) -> bool {
-        (id as usize) < self.events.len()
+        id != INVALID_EVENT_ID
+//        (id as usize) < self.events.len()
     }
 
     /// Returns the position of a given event in the queue.
@@ -464,20 +466,13 @@ pub struct EventQueueBuilder {
     validator: DebugValidator,
 }
 
-impl Default for EventQueueBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl EventQueueBuilder {
-    // TODO: this should take the tolerance as parameter.
-    pub fn new() -> Self {
-        EventQueue::new().into_builder()
+    pub fn new(tolerance: f32) -> Self {
+        EventQueue::new().into_builder(tolerance)
     }
 
-    pub fn with_capacity(cap: usize) -> Self {
-        EventQueue::with_capacity(cap).into_builder()
+    pub fn with_capacity(cap: usize, tolerance: f32) -> Self {
+        EventQueue::with_capacity(cap).into_builder(tolerance)
     }
 
     pub fn set_tolerance(&mut self, tolerance: f32) {
@@ -496,7 +491,7 @@ impl EventQueueBuilder {
         &mut self,
         tolerance: f32,
         sweep_orientation: Orientation,
-        path: impl Iterator<Item = PathEvent>,
+        path: impl IntoIterator<Item = PathEvent>,
     ) {
         self.reset();
 
@@ -566,7 +561,7 @@ impl EventQueueBuilder {
         &mut self,
         tolerance: f32,
         sweep_orientation: Orientation,
-        path_events: impl Iterator<Item = IdEvent>,
+        path_events: impl IntoIterator<Item = IdEvent>,
         points: &impl PositionStore,
     ) {
         self.reset();

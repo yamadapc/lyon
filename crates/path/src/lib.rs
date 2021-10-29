@@ -96,8 +96,8 @@ pub mod math {
     /// Alias for ```euclid::default::Size2D<f32>```.
     pub type Size = euclid::default::Size2D<f32>;
 
-    /// Alias for ```euclid::default::Rect<f32>```
-    pub type Rect = euclid::default::Rect<f32>;
+    /// Alias for ```euclid::default::Box2D<f32>```
+    pub type Box2D = euclid::default::Box2D<f32>;
 
     /// Alias for ```euclid::default::Transform2D<f32>```
     pub type Transform = euclid::default::Transform2D<f32>;
@@ -113,15 +113,6 @@ pub mod math {
 
     /// An angle in radians (f32).
     pub type Angle = euclid::Angle<f32>;
-
-    /// Shorthand for `Rect::new(Point::new(x, y), Size::new(w, h))`.
-    #[inline]
-    pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
-        Rect {
-            origin: point(x, y),
-            size: size(w, h),
-        }
-    }
 
     /// Shorthand for `Vector::new(x, y)`.
     #[inline]
@@ -139,6 +130,118 @@ pub mod math {
     #[inline]
     pub fn size(w: f32, h: f32) -> Size {
         Size::new(w, h)
+    }
+}
+
+/// Line cap as defined by the SVG specification.
+///
+/// See: <https://svgwg.org/specs/strokes/#StrokeLinecapProperty>
+///
+/// <svg viewBox="0 0 400 399.99998" height="400" width="400">
+///   <g transform="translate(0,-652.36229)">
+///     <path style="opacity:1;fill:#80b3ff;stroke:#000000;stroke-width:1;stroke-linejoin:round;" d="m 240,983 a 30,30 0 0 1 -25,-15 30,30 0 0 1 0,-30.00001 30,30 0 0 1 25.98076,-15 l 0,30 z"/>
+///     <path style="fill:#80b3ff;stroke:#000000;stroke-width:1px;stroke-linecap:butt;" d="m 390,782.6 -150,0 0,-60 150,0.5"/>
+///     <circle style="opacity:1;fill:#ff7f2a;stroke:#000000;stroke-width:1;stroke-linejoin:round;" r="10" cy="752.89227" cx="240.86813"/>
+///     <path style="fill:none;stroke:#000000;stroke-width:1px;stroke-linejoin:round;" d="m 240,722.6 150,60"/>
+///     <path style="fill:#80b3ff;stroke:#000000;stroke-width:1px;stroke-linecap:butt;" d="m 390,882 -180,0 0,-60 180,0.4"/>
+///     <circle style="opacity:1;fill:#ff7f2a;stroke:#000000;stroke-width:1;stroke-linejoin:round;" cx="239.86813" cy="852.20868" r="10" />
+///     <path style="fill:none;stroke:#000000;stroke-width:1px;stroke-linejoin:round;" d="m 210.1,822.3 180,60"/>
+///     <path style="fill:#80b3ff;stroke:#000000;stroke-width:1px;stroke-linecap:butt;" d="m 390,983 -150,0 0,-60 150,0.4"/>
+///     <circle style="opacity:1;fill:#ff7f2a;stroke:#000000;stroke-width:1;stroke-linejoin:round;" cx="239.86813" cy="953.39734" r="10" />
+///     <path style="fill:none;stroke:#000000;stroke-width:1px;stroke-linejoin:round;" d="m 390,983 -150,-60 L 210,953 l 30,30 -21.5,-9.5 L 210,953 218.3,932.5 240,923.4"/>
+///     <text y="757.61273" x="183.65314" style="font-style:normal;font-weight:normal;font-size:20px;line-height:125%;font-family:Sans;text-align:end;text-anchor:end;fill:#000000;stroke:none;">
+///        <tspan y="757.61273" x="183.65314">LineCap::Butt</tspan>
+///        <tspan y="857.61273" x="183.65314">LineCap::Square</tspan>
+///        <tspan y="957.61273" x="183.65314">LineCap::Round</tspan>
+///      </text>
+///   </g>
+/// </svg>
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+pub enum LineCap {
+    /// The stroke for each sub-path does not extend beyond its two endpoints.
+    /// A zero length sub-path will therefore not have any stroke.
+    Butt,
+    /// At the end of each sub-path, the shape representing the stroke will be
+    /// extended by a rectangle with the same width as the stroke width and
+    /// whose length is half of the stroke width. If a sub-path has zero length,
+    /// then the resulting effect is that the stroke for that sub-path consists
+    /// solely of a square with side length equal to the stroke width, centered
+    /// at the sub-path's point.
+    Square,
+    /// At each end of each sub-path, the shape representing the stroke will be extended
+    /// by a half circle with a radius equal to the stroke width.
+    /// If a sub-path has zero length, then the resulting effect is that the stroke for
+    /// that sub-path consists solely of a full circle centered at the sub-path's point.
+    Round,
+}
+
+/// Line join as defined by the SVG specification.
+///
+/// See: <https://svgwg.org/specs/strokes/#StrokeLinejoinProperty>
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+pub enum LineJoin {
+    /// A sharp corner is to be used to join path segments.
+    Miter,
+    /// Same as a miter join, but if the miter limit is exceeded,
+    /// the miter is clipped at a miter length equal to the miter limit value
+    /// multiplied by the stroke width.
+    MiterClip,
+    /// A round corner is to be used to join path segments.
+    Round,
+    /// A beveled corner is to be used to join path segments.
+    /// The bevel shape is a triangle that fills the area between the two stroked
+    /// segments.
+    Bevel,
+}
+
+/// The positive or negative side of a vector or segment.
+///
+/// Given a reference vector `v0`, a vector `v1` is on the positive side
+/// if the sign of the cross product `v0 x v1` is positive.
+///
+/// This type does not use the left/right terminology to avoid confusion with
+/// left-handed / right-handed coordinate systems. Right-handed coordinate systems
+/// seem to be what a lot of people are most familiar with (especially in 2D), however
+/// most vector graphics specifications use y-down left-handed coordinate systems.
+/// Unfortunately mirroring the y axis inverts the meaning of "left" and "right", which
+/// causes confusion. In practice:
+///
+/// - In a y-down left-handed coordinate system such as `SVG`'s, `Side::Positive` is the right side.
+/// - In a y-up right-handed coordinate system, `Side::Positive` is the left side.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
+pub enum Side {
+    Positive,
+    Negative,
+}
+
+impl Side {
+    #[inline]
+    pub fn opposite(self) -> Self {
+        match self {
+            Side::Positive => Side::Negative,
+            Side::Negative => Side::Positive,
+        }
+    }
+
+    #[inline]
+    pub fn is_positive(self) -> bool {
+        self == Side::Positive
+    }
+
+    #[inline]
+    pub fn is_negative(self) -> bool {
+        self == Side::Negative
+    }
+
+    #[inline]
+    pub fn to_f32(self) -> f32 {
+        match self {
+            Side::Positive => 1.0,
+            Side::Negative => -1.0,
+        }
     }
 }
 
@@ -231,7 +334,7 @@ pub struct EventId(#[doc(hidden)] pub u32);
 
 impl EventId {
     pub const INVALID: Self = EventId(std::u32::MAX);
-    pub fn to_usize(&self) -> usize {
+    pub fn to_usize(self) -> usize {
         self.0 as usize
     }
 }
@@ -292,7 +395,7 @@ pub trait AttributeStore {
     /// Returns the endpoint's custom attributes as a slice of 32 bits floats.
     ///
     /// The size of the slice must be equal to the result of `num_attributes()`.
-    fn get(&self, id: EndpointId) -> &[f32];
+    fn get(&self, id: EndpointId) -> Attributes;
 
     /// Returns the number of float attributes per endpoint.
     ///
@@ -304,8 +407,9 @@ impl AttributeStore for () {
     fn num_attributes(&self) -> usize {
         0
     }
-    fn get(&self, _: EndpointId) -> &[f32] {
-        &[]
+
+    fn get(&self, _: EndpointId) -> Attributes {
+        Attributes(&[])
     }
 }
 
@@ -325,13 +429,59 @@ impl<'l> AttributeSlice<'l> {
 }
 
 impl<'l> AttributeStore for AttributeSlice<'l> {
-    fn get(&self, id: EndpointId) -> &[f32] {
+    fn get(&self, id: EndpointId) -> Attributes {
         let start = id.to_usize() * self.stride;
         let end = start + self.stride;
-        &self.data[start..end]
+        Attributes(&self.data[start..end])
     }
 
     fn num_attributes(&self) -> usize {
         self.stride
     }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AttributeIndex(pub u8);
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Attributes<'l>(pub &'l[f32]);
+
+impl<'l> Attributes<'l> {
+    pub const NONE: Attributes<'static> = Attributes(&[]);
+
+    #[inline]
+    pub fn len(&self) -> usize { self.0.len() }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[f32] { self.0 }
+}
+
+impl<'l> Default for Attributes<'l> {
+    fn default() -> Self {
+        Attributes::NONE
+    }
+}
+
+impl<'l> std::ops::Index<AttributeIndex> for Attributes<'l> {
+    type Output = f32;
+    #[inline]
+    fn index(&self, idx: AttributeIndex) -> &f32 {
+        &self.0[idx.0 as usize]
+    }
+}
+
+impl<'l> std::ops::Index<usize> for Attributes<'l> {
+    type Output = f32;
+    #[inline]
+    fn index(&self, idx: usize) -> &f32 {
+        &self.0[idx]
+    }
+}
+
+impl<'l> From<&'l[f32]> for Attributes<'l> {
+    fn from(slice: &'l[f32]) -> Attributes<'l> { Attributes(slice) }
+}
+
+impl<'l> Into<&'l[f32]> for Attributes<'l> {
+    fn into(self) -> &'l[f32] { self.0 }
 }

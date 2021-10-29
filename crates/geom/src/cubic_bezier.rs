@@ -4,10 +4,10 @@ pub use crate::flatten_cubic::Flattened;
 use crate::flatten_cubic::{find_cubic_bezier_inflection_points, flatten_cubic_bezier_with_t};
 use crate::monotonic::Monotonic;
 use crate::scalar::Scalar;
-use crate::segment::{BoundingRect, Segment};
+use crate::segment::{BoundingBox, Segment};
 use crate::traits::Transformation;
 use crate::utils::{cubic_polynomial_roots, min_max};
-use crate::{Point, Rect, Vector, Box2D, point};
+use crate::{Point, Vector, Box2D, point};
 use crate::{Line, LineEquation, LineSegment, QuadraticBezierSegment};
 use arrayvec::ArrayVec;
 
@@ -73,7 +73,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
 
     /// Return the parameter values corresponding to a given x coordinate.
     /// See also solve_t_for_x for monotonic curves.
-    pub fn solve_t_for_x(&self, x: S) -> ArrayVec<[S; 3]> {
+    pub fn solve_t_for_x(&self, x: S) -> ArrayVec<S, 3> {
         if self.is_a_point(S::ZERO)
             || (self.non_point_is_linear(S::ZERO) && self.from.x == self.to.x)
         {
@@ -85,7 +85,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
 
     /// Return the parameter values corresponding to a given y coordinate.
     /// See also solve_t_for_y for monotonic curves.
-    pub fn solve_t_for_y(&self, y: S) -> ArrayVec<[S; 3]> {
+    pub fn solve_t_for_y(&self, y: S) -> ArrayVec<S, 3> {
         if self.is_a_point(S::ZERO)
             || (self.non_point_is_linear(S::ZERO) && self.from.y == self.to.y)
         {
@@ -102,7 +102,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
         ctrl1: S,
         ctrl2: S,
         to: S,
-    ) -> ArrayVec<[S; 3]> {
+    ) -> ArrayVec<S, 3> {
         let mut result = ArrayVec::new();
 
         let a = -from + S::THREE * ctrl1 - S::THREE * ctrl2 + to;
@@ -335,10 +335,10 @@ impl<S: Scalar> CubicBezierSegment<S> {
     where
         F: FnMut(S),
     {
-        let mut x_extrema: ArrayVec<[S; 3]> = ArrayVec::new();
+        let mut x_extrema: ArrayVec<S, 3> = ArrayVec::new();
         self.for_each_local_x_extremum_t(&mut |t| x_extrema.push(t));
 
-        let mut y_extrema: ArrayVec<[S; 3]> = ArrayVec::new();
+        let mut y_extrema: ArrayVec<S, 3> = ArrayVec::new();
         self.for_each_local_y_extremum_t(&mut |t| y_extrema.push(t));
 
         let mut it_x = x_extrema.iter().cloned();
@@ -605,17 +605,12 @@ impl<S: Scalar> CubicBezierSegment<S> {
 
     /// Returns a conservative rectangle the curve is contained in.
     ///
-    /// This method is faster than `bounding_rect` but more conservative.
+    /// This method is faster than `bounding_box` but more conservative.
     pub fn fast_bounding_box(&self) -> Box2D<S> {
         let (min_x, max_x) = self.fast_bounding_range_x();
         let (min_y, max_y) = self.fast_bounding_range_y();
 
         Box2D { min: point(min_x, min_y), max: point(max_x, max_y) }
-    }
-
-    /// Returns a conservative rectangle that contains the curve.
-    pub fn fast_bounding_rect(&self) -> Rect<S> {
-        self.fast_bounding_box().to_rect()
     }
 
     /// Returns a conservative range of x that contains this curve.
@@ -663,12 +658,6 @@ impl<S: Scalar> CubicBezierSegment<S> {
         let (min_y, max_y) = self.bounding_range_y();
 
         Box2D { min: point(min_x, min_y), max: point(max_x, max_y) }
-    }
-
-    /// Returns a conservative rectangle that contains the curve.
-    #[inline]
-    pub fn bounding_rect(&self) -> Rect<S> {
-        self.bounding_box().to_rect()
     }
 
     /// Returns the smallest range of x that contains this curve.
@@ -727,15 +716,15 @@ impl<S: Scalar> CubicBezierSegment<S> {
     /// but not endpoint/endpoint intersections.
     ///
     /// Returns no intersections if either curve is a point.
-    pub fn cubic_intersections_t(&self, curve: &CubicBezierSegment<S>) -> ArrayVec<[(S, S); 9]> {
+    pub fn cubic_intersections_t(&self, curve: &CubicBezierSegment<S>) -> ArrayVec<(S, S), 9> {
         cubic_bezier_intersections_t(self, curve)
     }
 
     /// Computes the intersection points (if any) between this segment and another one.
-    pub fn cubic_intersections(&self, curve: &CubicBezierSegment<S>) -> ArrayVec<[Point<S>; 9]> {
+    pub fn cubic_intersections(&self, curve: &CubicBezierSegment<S>) -> ArrayVec<Point<S>, 9> {
         let intersections = self.cubic_intersections_t(curve);
 
-        let mut result_with_repeats = ArrayVec::<[_; 9]>::new();
+        let mut result_with_repeats = ArrayVec::<_, 9>::new();
         for (t, _) in intersections {
             result_with_repeats.push(self.sample(t));
         }
@@ -794,7 +783,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
     pub fn quadratic_intersections_t(
         &self,
         curve: &QuadraticBezierSegment<S>,
-    ) -> ArrayVec<[(S, S); 9]> {
+    ) -> ArrayVec<(S, S), 9> {
         self.cubic_intersections_t(&curve.to_cubic())
     }
 
@@ -802,7 +791,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
     pub fn quadratic_intersections(
         &self,
         curve: &QuadraticBezierSegment<S>,
-    ) -> ArrayVec<[Point<S>; 9]> {
+    ) -> ArrayVec<Point<S>, 9> {
         self.cubic_intersections(&curve.to_cubic())
     }
 
@@ -811,7 +800,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
     /// The result is provided in the form of the `t` parameters of each
     /// point along curve. To get the intersection points, sample the curve
     /// at the corresponding values.
-    pub fn line_intersections_t(&self, line: &Line<S>) -> ArrayVec<[S; 3]> {
+    pub fn line_intersections_t(&self, line: &Line<S>) -> ArrayVec<S, 3> {
         if line.vector.square_length() < S::EPSILON {
             return ArrayVec::new();
         }
@@ -849,7 +838,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
     }
 
     /// Computes the intersection points (if any) between this segment and a line.
-    pub fn line_intersections(&self, line: &Line<S>) -> ArrayVec<[Point<S>; 3]> {
+    pub fn line_intersections(&self, line: &Line<S>) -> ArrayVec<Point<S>, 3> {
         let intersections = self.line_intersections_t(&line);
 
         let mut result = ArrayVec::new();
@@ -865,10 +854,10 @@ impl<S: Scalar> CubicBezierSegment<S> {
     /// The result is provided in the form of the `t` parameters of each
     /// point along curve and segment. To get the intersection points, sample
     /// the segments at the corresponding values.
-    pub fn line_segment_intersections_t(&self, segment: &LineSegment<S>) -> ArrayVec<[(S, S); 3]> {
+    pub fn line_segment_intersections_t(&self, segment: &LineSegment<S>) -> ArrayVec<(S, S), 3> {
         if !self
-            .fast_bounding_rect().inflate(S::EPSILON, S::EPSILON)
-            .intersects(&segment.bounding_rect().inflate(S::EPSILON, S::EPSILON))
+            .fast_bounding_box().inflate(S::EPSILON, S::EPSILON)
+            .intersects(&segment.bounding_box().inflate(S::EPSILON, S::EPSILON))
         {
             return ArrayVec::new();
         }
@@ -916,7 +905,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
         self.to
     }
 
-    pub fn line_segment_intersections(&self, segment: &LineSegment<S>) -> ArrayVec<[Point<S>; 3]> {
+    pub fn line_segment_intersections(&self, segment: &LineSegment<S>) -> ArrayVec<Point<S>, 3> {
         let intersections = self.line_segment_intersections_t(&segment);
 
         let mut result = ArrayVec::new();
@@ -932,14 +921,8 @@ impl<S: Scalar> Segment for CubicBezierSegment<S> {
     impl_segment!(S);
 }
 
-impl<S: Scalar> BoundingRect for CubicBezierSegment<S> {
+impl<S: Scalar> BoundingBox for CubicBezierSegment<S> {
     type Scalar = S;
-    fn bounding_rect(&self) -> Rect<S> {
-        self.bounding_rect()
-    }
-    fn fast_bounding_rect(&self) -> Rect<S> {
-        self.fast_bounding_rect()
-    }
     fn bounding_range_x(&self) -> (S, S) {
         self.bounding_range_x()
     }
@@ -957,11 +940,8 @@ impl<S: Scalar> BoundingRect for CubicBezierSegment<S> {
 /// A monotonically increasing in x and y quadratic bézier curve segment
 pub type MonotonicCubicBezierSegment<S> = Monotonic<CubicBezierSegment<S>>;
 
-#[cfg(test)]
-use crate::rect;
-
 #[test]
-fn fast_bounding_rect_for_cubic_bezier_segment() {
+fn fast_bounding_box_for_cubic_bezier_segment() {
     let a = CubicBezierSegment {
         from: Point::new(0.0, 0.0),
         ctrl1: Point::new(0.5, 1.0),
@@ -969,15 +949,15 @@ fn fast_bounding_rect_for_cubic_bezier_segment() {
         to: Point::new(2.0, 0.0),
     };
 
-    let expected_bounding_rect = rect(0.0, -1.0, 2.0, 2.0);
+    let expected_aabb = Box2D { min: point(0.0, -1.0), max: point(2.0, 1.0) };
 
-    let actual_bounding_rect = a.fast_bounding_rect();
+    let actual_aabb = a.fast_bounding_box();
 
-    assert!(expected_bounding_rect == actual_bounding_rect)
+    assert!(expected_aabb == actual_aabb)
 }
 
 #[test]
-fn minimum_bounding_rect_for_cubic_bezier_segment() {
+fn minimum_bounding_box_for_cubic_bezier_segment() {
     let a = CubicBezierSegment {
         from: Point::new(0.0, 0.0),
         ctrl1: Point::new(0.5, 2.0),
@@ -985,13 +965,13 @@ fn minimum_bounding_rect_for_cubic_bezier_segment() {
         to: Point::new(2.0, 0.0),
     };
 
-    let expected_bigger_bounding_rect: Rect<f32> = rect(0.0, -0.6, 2.0, 1.2);
-    let expected_smaller_bounding_rect: Rect<f32> = rect(0.1, -0.5, 1.9, 1.0);
+    let expected_bigger_aabb: Box2D<f32> = Box2D { min: point(0.0, -0.6), max: point(2.0, 0.6) };
+    let expected_smaller_aabb: Box2D<f32> = Box2D { min: point(0.1, -0.5), max: point(2.0, 0.5) };
 
-    let actual_minimum_bounding_rect: Rect<f32> = a.bounding_rect();
+    let actual_minimum_aabb = a.bounding_box();
 
-    assert!(expected_bigger_bounding_rect.contains_rect(&actual_minimum_bounding_rect));
-    assert!(actual_minimum_bounding_rect.contains_rect(&expected_smaller_bounding_rect));
+    assert!(expected_bigger_aabb.contains_box(&actual_minimum_aabb));
+    assert!(actual_minimum_aabb.contains_box(&expected_smaller_aabb));
 }
 
 #[test]
@@ -1220,7 +1200,7 @@ fn test_monotonic() {
 #[test]
 fn test_line_segment_intersections() {
     use crate::point;
-    fn assert_approx_eq(a: ArrayVec<[(f32, f32); 3]>, b: &[(f32, f32)], epsilon: f32) {
+    fn assert_approx_eq(a: ArrayVec<(f32, f32), 3>, b: &[(f32, f32)], epsilon: f32) {
         for i in 0..a.len() {
             if f32::abs(a[i].0 - b[i].0) > epsilon || f32::abs(a[i].1 - b[i].1) > epsilon {
                 println!("{:?} != {:?}", a, b);
@@ -1270,7 +1250,7 @@ fn test_line_segment_intersections() {
 #[test]
 fn test_parameters_for_value() {
     use crate::point;
-    fn assert_approx_eq(a: ArrayVec<[f32; 3]>, b: &[f32], epsilon: f32) {
+    fn assert_approx_eq(a: ArrayVec<f32, 3>, b: &[f32], epsilon: f32) {
         for i in 0..a.len() {
             if f32::abs(a[i] - b[i]) > epsilon {
                 println!("{:?} != {:?}", a, b);

@@ -195,6 +195,7 @@ pub mod geometry_builder;
 mod math_utils;
 mod monotone;
 mod stroke;
+mod basic_shapes;
 
 #[cfg(test)]
 #[rustfmt::skip]
@@ -223,7 +224,7 @@ pub use crate::geometry_builder::{
     GeometryBuilderError, StrokeGeometryBuilder, StrokeVertexConstructor, VertexBuffers,
 };
 
-pub use crate::path::FillRule;
+pub use crate::path::{FillRule, LineJoin, LineCap, Side, Attributes, AttributeIndex};
 
 use crate::path::EndpointId;
 
@@ -270,35 +271,10 @@ impl From<InternalError> for TessellationError {
     }
 }
 
-/// Left or right.
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
-pub enum Side {
-    Left,
-    Right,
-}
-
-impl Side {
-    pub fn opposite(self) -> Self {
-        match self {
-            Side::Left => Side::Right,
-            Side::Right => Side::Left,
-        }
-    }
-
-    pub fn is_left(self) -> bool {
-        self == Side::Left
-    }
-
-    pub fn is_right(self) -> bool {
-        self == Side::Right
-    }
-}
-
 /// Before or After. Used to describe position relative to a join.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
-pub enum Order {
+pub(crate) enum Order {
     Before,
     After,
 }
@@ -341,67 +317,20 @@ pub enum VertexSource {
     },
 }
 
-/// Line cap as defined by the SVG specification.
-///
-/// See: <https://svgwg.org/specs/strokes/#StrokeLinecapProperty>
-///
-/// <svg viewBox="0 0 400 399.99998" height="400" width="400">
-///   <g transform="translate(0,-652.36229)">
-///     <path style="opacity:1;fill:#80b3ff;stroke:#000000;stroke-width:1;stroke-linejoin:round;" d="m 240,983 a 30,30 0 0 1 -25,-15 30,30 0 0 1 0,-30.00001 30,30 0 0 1 25.98076,-15 l 0,30 z"/>
-///     <path style="fill:#80b3ff;stroke:#000000;stroke-width:1px;stroke-linecap:butt;" d="m 390,782.6 -150,0 0,-60 150,0.5"/>
-///     <circle style="opacity:1;fill:#ff7f2a;stroke:#000000;stroke-width:1;stroke-linejoin:round;" r="10" cy="752.89227" cx="240.86813"/>
-///     <path style="fill:none;stroke:#000000;stroke-width:1px;stroke-linejoin:round;" d="m 240,722.6 150,60"/>
-///     <path style="fill:#80b3ff;stroke:#000000;stroke-width:1px;stroke-linecap:butt;" d="m 390,882 -180,0 0,-60 180,0.4"/>
-///     <circle style="opacity:1;fill:#ff7f2a;stroke:#000000;stroke-width:1;stroke-linejoin:round;" cx="239.86813" cy="852.20868" r="10" />
-///     <path style="fill:none;stroke:#000000;stroke-width:1px;stroke-linejoin:round;" d="m 210.1,822.3 180,60"/>
-///     <path style="fill:#80b3ff;stroke:#000000;stroke-width:1px;stroke-linecap:butt;" d="m 390,983 -150,0 0,-60 150,0.4"/>
-///     <circle style="opacity:1;fill:#ff7f2a;stroke:#000000;stroke-width:1;stroke-linejoin:round;" cx="239.86813" cy="953.39734" r="10" />
-///     <path style="fill:none;stroke:#000000;stroke-width:1px;stroke-linejoin:round;" d="m 390,983 -150,-60 L 210,953 l 30,30 -21.5,-9.5 L 210,953 218.3,932.5 240,923.4"/>
-///     <text y="757.61273" x="183.65314" style="font-style:normal;font-weight:normal;font-size:20px;line-height:125%;font-family:Sans;text-align:end;text-anchor:end;fill:#000000;stroke:none;">
-///        <tspan y="757.61273" x="183.65314">LineCap::Butt</tspan>
-///        <tspan y="857.61273" x="183.65314">LineCap::Square</tspan>
-///        <tspan y="957.61273" x="183.65314">LineCap::Round</tspan>
-///      </text>
-///   </g>
-/// </svg>
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
-pub enum LineCap {
-    /// The stroke for each sub-path does not extend beyond its two endpoints.
-    /// A zero length sub-path will therefore not have any stroke.
-    Butt,
-    /// At the end of each sub-path, the shape representing the stroke will be
-    /// extended by a rectangle with the same width as the stroke width and
-    /// whose length is half of the stroke width. If a sub-path has zero length,
-    /// then the resulting effect is that the stroke for that sub-path consists
-    /// solely of a square with side length equal to the stroke width, centered
-    /// at the sub-path's point.
-    Square,
-    /// At each end of each sub-path, the shape representing the stroke will be extended
-    /// by a half circle with a radius equal to the stroke width.
-    /// If a sub-path has zero length, then the resulting effect is that the stroke for
-    /// that sub-path consists solely of a full circle centered at the sub-path's point.
-    Round,
-}
+impl VertexSource {
+    pub fn is_endpoint(&self) -> bool {
+        match self {
+            VertexSource::Endpoint { .. } => true,
+            _ => false,
+        }
+    }
 
-/// Line join as defined by the SVG specification.
-///
-/// See: <https://svgwg.org/specs/strokes/#StrokeLinejoinProperty>
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
-pub enum LineJoin {
-    /// A sharp corner is to be used to join path segments.
-    Miter,
-    /// Same as a miter join, but if the miter limit is exceeded,
-    /// the miter is clipped at a miter length equal to the miter limit value
-    /// multiplied by the stroke width.
-    MiterClip,
-    /// A round corner is to be used to join path segments.
-    Round,
-    /// A bevelled corner is to be used to join path segments.
-    /// The bevel shape is a triangle that fills the area between the two stroked
-    /// segments.
-    Bevel,
+    pub fn is_edge(&self) -> bool {
+        match self {
+            VertexSource::Edge { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 /// Vertical or Horizontal.
@@ -437,6 +366,12 @@ pub struct StrokeOptions {
     /// Default value: `StrokeOptions::DEFAULT_LINE_WIDTH`.
     pub line_width: f32,
 
+    /// Index of a custom attribute defining a per-vertex
+    /// factor to modulate the line width.
+    ///
+    /// Default value: `None`.
+    pub variable_line_width: Option<AttributeIndex>,
+
     /// See the SVG specification.
     ///
     /// Must be greater than or equal to 1.0.
@@ -469,6 +404,7 @@ impl StrokeOptions {
         end_cap: Self::DEFAULT_LINE_CAP,
         line_join: Self::DEFAULT_LINE_JOIN,
         line_width: Self::DEFAULT_LINE_WIDTH,
+        variable_line_width: None,
         miter_limit: Self::DEFAULT_MITER_LIMIT,
         tolerance: Self::DEFAULT_TOLERANCE,
     };
@@ -519,6 +455,12 @@ impl StrokeOptions {
     pub fn with_miter_limit(mut self, limit: f32) -> Self {
         assert!(limit >= Self::MINIMUM_MITER_LIMIT);
         self.miter_limit = limit;
+        self
+    }
+
+    #[inline]
+    pub fn with_variable_line_width(mut self, idx: AttributeIndex) -> Self {
+        self.variable_line_width = Some(idx);
         self
     }
 }
@@ -642,11 +584,11 @@ pub struct VertexId(pub Index);
 impl VertexId {
     pub const INVALID: VertexId = VertexId(u32::MAX);
 
-    pub fn offset(&self) -> Index {
+    pub fn offset(self) -> Index {
         self.0
     }
 
-    pub fn to_usize(&self) -> usize {
+    pub fn to_usize(self) -> usize {
         self.0 as usize
     }
 
@@ -706,6 +648,57 @@ impl From<VertexId> for usize {
     }
 }
 
+pub(crate) struct SimpleAttributeStore {
+    data: Vec<f32>,
+    num_attributes: usize,
+    next_id: EndpointId,
+}
+
+impl path::AttributeStore for SimpleAttributeStore {
+    fn get(&self, id: EndpointId) -> Attributes {
+        let start = id.0 as usize * self.num_attributes;
+        let end = start + self.num_attributes;
+        Attributes(&self.data[start..end])
+    }
+
+    fn num_attributes(&self) -> usize { self.num_attributes }
+}
+
+impl Default for SimpleAttributeStore {
+    fn default() -> Self {
+        SimpleAttributeStore::new(0)
+    }
+}
+
+impl SimpleAttributeStore {
+    pub fn new(num_attributes: usize) -> Self {
+        SimpleAttributeStore {
+            data: Vec::new(),
+            num_attributes,
+            next_id: EndpointId(0),
+        }
+    }
+
+    pub fn add(&mut self, attributes: Attributes) -> EndpointId {
+        debug_assert_eq!(attributes.len(), self.num_attributes);
+        self.data.extend_from_slice(attributes.as_slice());
+        let id = self.next_id;
+        self.next_id.0 += 1;
+        id
+    }
+
+    pub fn reserve(&mut self, n: usize) {
+        self.data.reserve(n * self.num_attributes);
+    }
+
+    pub fn reset(&mut self, num_attributes: usize) {
+        self.data.clear();
+        self.next_id = EndpointId(0);
+        self.num_attributes = num_attributes;
+    }
+}
+
+
 #[test]
 fn test_without_miter_limit() {
     let expected_limit = 4.0;
@@ -726,33 +719,4 @@ fn test_with_miter_limit() {
 #[should_panic]
 fn test_with_invalid_miter_limit() {
     let _ = StrokeOptions::default().with_miter_limit(0.0);
-}
-
-#[test]
-fn test_line_width() {
-    use crate::math::{point, Point};
-    let mut builder = crate::path::Path::builder();
-    builder.begin(point(0.0, 1.0));
-    builder.line_to(point(2.0, 1.0));
-    builder.end(false);
-    let path = builder.build();
-
-    let options = StrokeOptions::DEFAULT.with_line_width(2.0);
-    let mut geometry: VertexBuffers<Point, u16> = VertexBuffers::new();
-    StrokeTessellator::new()
-        .tessellate(
-            path.iter(),
-            &options,
-            &mut crate::geometry_builder::simple_builder(&mut geometry),
-        )
-        .unwrap();
-
-    for p in &geometry.vertices {
-        assert!(
-            *p == point(0.0, 0.0)
-                || *p == point(0.0, 2.0)
-                || *p == point(2.0, 0.0)
-                || *p == point(2.0, 2.0)
-        );
-    }
 }

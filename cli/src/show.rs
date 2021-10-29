@@ -10,11 +10,10 @@ use futures::executor::block_on;
 use std::ops::Rem;
 
 use crate::commands::{AntiAliasing, Background, RenderCmd, TessellateCmd, Tessellator};
-use lyon::algorithms::aabb::bounding_rect;
+use lyon::algorithms::aabb::bounding_box;
 use lyon::algorithms::hatching::*;
 use lyon::geom::LineSegment;
 use lyon::math::*;
-use lyon::path::builder::PathBuilder;
 use lyon::path::Path;
 use lyon::tess2;
 use lyon::tessellation;
@@ -42,7 +41,7 @@ unsafe impl bytemuck::Zeroable for Globals {}
 struct GpuVertex {
     position: [f32; 2],
     normal: [f32; 2],
-    prim_id: i32,
+    prim_id: u32,
 }
 unsafe impl bytemuck::Pod for GpuVertex {}
 unsafe impl bytemuck::Zeroable for GpuVertex {}
@@ -72,21 +71,21 @@ const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
 /// Creates a texture that uses MSAA and fits a given swap chain
 fn create_multisampled_framebuffer(
     device: &wgpu::Device,
-    sc_desc: &wgpu::SwapChainDescriptor,
+    desc: &wgpu::SurfaceConfiguration,
     sample_count: u32,
 ) -> wgpu::TextureView {
     let multisampled_frame_descriptor = &wgpu::TextureDescriptor {
         label: Some("Multisampled frame descriptor"),
         size: wgpu::Extent3d {
-            width: sc_desc.width,
-            height: sc_desc.height,
+            width: desc.width,
+            height: desc.height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count,
         dimension: wgpu::TextureDimension::D2,
-        format: sc_desc.format,
-        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
+        format: desc.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
     };
 
     device
@@ -127,8 +126,8 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             }
             Tessellator::Tess2 => {
                 tess2::FillTessellator::new()
-                    .tessellate(
-                        cmd.path.iter(),
+                    .tessellate_path(
+                        &cmd.path,
                         &options,
                         &mut tess2::geometry_builder::BuffersBuilder::new(&mut geometry, WithId(0)),
                     )
@@ -139,10 +138,10 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
 
     if let Some(options) = cmd.stroke {
         stroke
-            .tessellate(
-                cmd.path.iter(),
+            .tessellate_path(
+                &cmd.path,
                 &options,
-                &mut BuffersBuilder::new(&mut geometry, WithId(1)),
+                &mut BuffersBuilder::new(&mut geometry, WithId(stroke_prim_id)),
             )
             .unwrap();
     }
@@ -213,7 +212,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
     let mut bg_geometry: VertexBuffers<BgVertex, u32> = VertexBuffers::new();
 
     fill.tessellate_rectangle(
-        &Rect::new(point(-1.0, -1.0), size(2.0, 2.0)),
+        &Box2D { min: point(-1.0, -1.0), max: point(1.0, 1.0) },
         &FillOptions::DEFAULT,
         &mut BuffersBuilder::new(&mut bg_geometry, BgVertexCtor),
     )
@@ -266,8 +265,8 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
         ];
     }
 
-    let aabb = bounding_rect(cmd.path.iter());
-    let center = aabb.origin.lerp(aabb.max(), 0.5).to_vector();
+    let aabb = bounding_box(cmd.path.iter());
+    let center = aabb.center().to_vector();
 
     let mut scene = SceneParams {
         target_zoom: 5.0,
@@ -288,7 +287,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
     let window = Window::new(&event_loop).unwrap();
 
     // create an instance
-    let instance = wgpu::Instance::new(wgpu::BackendBit::PRIMARY);
+    let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
 
     // create an surface
     let surface = unsafe { instance.create_surface(&window) };
@@ -297,6 +296,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         compatible_surface: Some(&surface),
+        force_fallback_adapter: false,
     }))
     .unwrap();
     // create a device and a queue
@@ -313,25 +313,25 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
     let vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&geometry.vertices),
-        usage: wgpu::BufferUsage::VERTEX,
+        usage: wgpu::BufferUsages::VERTEX,
     });
 
     let ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&geometry.indices),
-        usage: wgpu::BufferUsage::INDEX,
+        usage: wgpu::BufferUsages::INDEX,
     });
 
     let bg_vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&bg_geometry.vertices),
-        usage: wgpu::BufferUsage::VERTEX,
+        usage: wgpu::BufferUsages::VERTEX,
     });
 
     let bg_ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&bg_geometry.indices),
-        usage: wgpu::BufferUsage::INDEX,
+        usage: wgpu::BufferUsages::INDEX,
     });
 
     let prim_buffer_byte_size = (PRIM_BUFFER_LEN * std::mem::size_of::<Primitive>()) as u64;
@@ -340,32 +340,40 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
     let prims_ubo = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Prims ubo"),
         size: prim_buffer_byte_size,
-        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
     let globals_ubo = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Globals ubo"),
         size: globals_buffer_byte_size,
-        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
-    let vs_module =
-        &device.create_shader_module(&wgpu::include_spirv!("./../shaders/geometry.vert.spv"));
-    let fs_module =
-        &device.create_shader_module(&wgpu::include_spirv!("./../shaders/geometry.frag.spv"));
-    let bg_vs_module =
-        &device.create_shader_module(&wgpu::include_spirv!("./../shaders/background.vert.spv"));
-    let bg_fs_module =
-        &device.create_shader_module(&wgpu::include_spirv!("./../shaders/background.frag.spv"));
+    let vs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        label: Some("Geometry vs"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("./../shaders/geometry.vs.wgsl").into()),
+    });
+    let fs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        label: Some("Geometry fs"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("./../shaders/geometry.fs.wgsl").into()),
+    });
+    let bg_vs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        label: Some("Background vs"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("./../shaders/background.vs.wgsl").into()),
+    });
+    let bg_fs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
+        label: Some("Background fs"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("./../shaders/background.fs.wgsl").into()),
+    });
 
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Bind group layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStage::VERTEX | wgpu::ShaderStage::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -375,7 +383,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStage::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -427,7 +435,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             entry_point: "main",
             buffers: &[wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<GpuVertex>() as u64,
-                step_mode: wgpu::InputStepMode::Vertex,
+                step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
                     wgpu::VertexAttribute {
                         offset: 0,
@@ -441,7 +449,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
                     },
                     wgpu::VertexAttribute {
                         offset: 16,
-                        format: wgpu::VertexFormat::Sint32,
+                        format: wgpu::VertexFormat::Uint32,
                         shader_location: 2,
                     },
                 ],
@@ -454,7 +462,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
                 wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Bgra8Unorm,
                     blend: None,
-                    write_mask: wgpu::ColorWrite::ALL,
+                    write_mask: wgpu::ColorWrites::ALL,
                 },
             ],
         }),
@@ -463,7 +471,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             polygon_mode: wgpu::PolygonMode::Fill,
             front_face: wgpu::FrontFace::Ccw,
             strip_index_format: None,
-            cull_mode: None,
+            cull_mode: Some(wgpu::Face::Back),
             clamp_depth: false,
             conservative: false,
         },
@@ -486,7 +494,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
     let wireframe_ibo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None,
         contents: bytemuck::cast_slice(&wireframe_indices),
-        usage: wgpu::BufferUsage::INDEX,
+        usage: wgpu::BufferUsages::INDEX,
     });
 
     let bg_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -497,7 +505,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             entry_point: "main",
             buffers: &[wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<Point>() as u64,
-                step_mode: wgpu::InputStepMode::Vertex,
+                step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[wgpu::VertexAttribute {
                     offset: 0,
                     format: wgpu::VertexFormat::Float32x2,
@@ -512,7 +520,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
                 wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Bgra8Unorm,
                     blend: None,
-                    write_mask: wgpu::ColorWrite::ALL,
+                    write_mask: wgpu::ColorWrites::ALL,
                 },
             ],
         }),
@@ -535,8 +543,8 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
 
     let size = window.inner_size();
 
-    let mut swap_chain_desc = wgpu::SwapChainDescriptor {
-        usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
+    let mut surface_desc = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: wgpu::TextureFormat::Bgra8Unorm,
         width: size.width,
         height: size.height,
@@ -545,7 +553,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
 
     let mut multisampled_render_target = None;
 
-    let mut swap_chain = device.create_swap_chain(&surface, &swap_chain_desc);
+    surface.configure(&device, &surface_desc);
 
     let mut depth_texture_view = None;
 
@@ -559,22 +567,22 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
         if scene.size_changed {
             scene.size_changed = false;
             let physical = scene.window_size;
-            swap_chain_desc.width = physical.width;
-            swap_chain_desc.height = physical.height;
-            swap_chain = device.create_swap_chain(&surface, &swap_chain_desc);
+            surface_desc.width = physical.width;
+            surface_desc.height = physical.height;
+            surface.configure(&device, &surface_desc);
 
             let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Depth texture"),
                 size: wgpu::Extent3d {
-                    width: swap_chain_desc.width,
-                    height: swap_chain_desc.height,
+                    width: surface_desc.width,
+                    height: surface_desc.height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
                 sample_count,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             });
 
             depth_texture_view =
@@ -583,7 +591,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             multisampled_render_target = if sample_count > 1 {
                 Some(create_multisampled_framebuffer(
                     &device,
-                    &swap_chain_desc,
+                    &surface_desc,
                     sample_count,
                 ))
             } else {
@@ -591,13 +599,15 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             };
         }
 
-        let frame = match swap_chain.get_current_frame() {
+        let frame = match surface.get_current_texture() {
             Ok(frame) => frame,
             Err(e) => {
                 println!("Swap-chain error: {:?}", e);
                 return;
             }
         };
+
+        let frame_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Encoder"),
@@ -646,11 +656,11 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
                         load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                         store: true,
                     },
-                    resolve_target: Some(&frame.output.view),
+                    resolve_target: Some(&frame_view),
                 }
             } else {
                 wgpu::RenderPassColorAttachment {
-                    view: &frame.output.view,
+                    view: &frame_view,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
                         store: true,
@@ -701,6 +711,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
         }
 
         queue.submit(Some(encoder.finish()));
+        frame.present();
 
         frame_count += 1.0;
     });
@@ -746,17 +757,18 @@ impl FillVertexConstructor<GpuVertex> for WithId {
         GpuVertex {
             position: vertex.position().to_array(),
             normal: [0.0, 0.0],
-            prim_id: self.0 as i32,
+            prim_id: self.0 as u32,
         }
     }
 }
 
 impl StrokeVertexConstructor<GpuVertex> for WithId {
     fn new_vertex(&mut self, vertex: tessellation::StrokeVertex) -> GpuVertex {
+        let p = vertex.position_on_path();
         GpuVertex {
-            position: vertex.position_on_path().to_array(),
-            normal: vertex.normal().to_array(),
-            prim_id: self.0 as i32,
+            position: p.to_array(),
+            normal: (vertex.position() - p).to_array(),
+            prim_id: self.0 as u32,
         }
     }
 }
@@ -778,7 +790,7 @@ impl tess2::geometry_builder::BasicVertexConstructor<GpuVertex> for WithId {
         GpuVertex {
             position: position.to_array(),
             normal: [0.0, 0.0],
-            prim_id: self.0 as i32,
+            prim_id: self.0 as u32,
         }
     }
 }

@@ -3,7 +3,6 @@ use lyon::algorithms::hatching::*;
 use lyon::extra::debugging::find_reduced_test_case;
 use lyon::geom::LineSegment;
 use lyon::math::*;
-use lyon::path::traits::PathBuilder;
 use lyon::path::Path;
 use lyon::tess2;
 use lyon::tessellation::geometry_builder::NoOutput;
