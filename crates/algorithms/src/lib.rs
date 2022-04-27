@@ -6,19 +6,18 @@
 //!
 //! This crate is reexported in [lyon](https://docs.rs/lyon/).
 
-// TODO doc!
-
 pub extern crate lyon_path as path;
 
 pub mod aabb;
+pub mod area;
 pub mod fit;
 pub mod hatching;
 pub mod hit_test;
+pub mod length;
 pub mod raycast;
 pub mod walk;
-pub mod length;
 pub mod winding;
-pub mod area;
+pub mod rect;
 
 pub use crate::path::geom;
 pub use crate::path::math;

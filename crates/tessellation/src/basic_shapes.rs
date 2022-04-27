@@ -1,13 +1,12 @@
-use crate::{FillVertex, VertexId, FillOptions, FillGeometryBuilder, TessellationResult, TessellationError};
 use crate::event_queue::{EventQueue, INVALID_EVENT_ID};
 use crate::math::*;
+use crate::{
+    FillGeometryBuilder, FillOptions, FillVertex, TessellationError, TessellationResult, VertexId,
+};
 
 use std::f32::consts::PI;
 
-pub fn fill_rectangle(
-    rect: &Box2D,
-    output: &mut dyn FillGeometryBuilder,
-) -> TessellationResult {
+pub fn fill_rectangle(rect: &Box2D, output: &mut dyn FillGeometryBuilder) -> TessellationResult {
     output.begin_geometry();
 
     let dummy_queue = EventQueue::new();
@@ -19,18 +18,20 @@ pub fn fill_rectangle(
             current_event: INVALID_EVENT_ID,
             attrib_store: None,
             attrib_buffer: &mut [],
-        })            
+        })
     };
 
     let a = vertex(rect.min)?;
-    let b = vertex(bottom_left(&rect))?;
-    let c = vertex(bottom_right(&rect))?;
-    let d = vertex(top_right(&rect))?;
+    let b = vertex(bottom_left(rect))?;
+    let c = vertex(bottom_right(rect))?;
+    let d = vertex(top_right(rect))?;
 
     output.add_triangle(a, b, c);
     output.add_triangle(a, c, d);
 
-    Ok(output.end_geometry())
+    output.end_geometry();
+
+    Ok(())
 }
 
 pub fn fill_circle(
@@ -39,12 +40,12 @@ pub fn fill_circle(
     options: &FillOptions,
     output: &mut dyn FillGeometryBuilder,
 ) -> TessellationResult {
-    output.begin_geometry();
-
     let radius = radius.abs();
     if radius == 0.0 {
-        return Ok(output.end_geometry());
+        return Ok(());
     }
+
+    output.begin_geometry();
 
     let up = vector(0.0, -1.0);
     let down = vector(0.0, 1.0);
@@ -61,28 +62,28 @@ pub fn fill_circle(
             events,
             current_event,
             attrib_store,
-            attrib_buffer: &mut[]
+            attrib_buffer: &mut [],
         })?,
         output.add_fill_vertex(FillVertex {
             position: center + (up * radius),
             events,
             current_event,
             attrib_store,
-            attrib_buffer: &mut[]
+            attrib_buffer: &mut [],
         })?,
         output.add_fill_vertex(FillVertex {
             position: center + (right * radius),
             events,
             current_event,
             attrib_store,
-            attrib_buffer: &mut[]
+            attrib_buffer: &mut [],
         })?,
         output.add_fill_vertex(FillVertex {
             position: center + (down * radius),
             events,
             current_event,
             attrib_store,
-            attrib_buffer: &mut[]
+            attrib_buffer: &mut [],
         })?,
     ];
 
@@ -114,7 +115,9 @@ pub fn fill_circle(
         )?;
     }
 
-    Ok(output.end_geometry())
+    output.end_geometry();
+
+    Ok(())
 }
 
 fn bottom_left(rect: &Box2D) -> Point {
@@ -128,7 +131,6 @@ fn top_right(rect: &Box2D) -> Point {
 fn bottom_right(rect: &Box2D) -> Point {
     rect.max
 }
-
 
 // Returns the maximum length of individual line segments when approximating a
 // circle.
@@ -171,7 +173,7 @@ fn fill_border_radius(
 
     let vertex = output.add_fill_vertex(FillVertex {
         position,
-        events: &dummy_queue,
+        events: dummy_queue,
         current_event: INVALID_EVENT_ID,
         attrib_store: None,
         attrib_buffer: &mut [],
@@ -201,41 +203,35 @@ fn fill_border_radius(
     )
 }
 
-
 #[test]
 fn basic_shapes() {
-    use crate::{GeometryBuilderError, Count};
+    use crate::{GeometryBuilderError};
 
     let mut tess = crate::FillTessellator::new();
 
     tess.tessellate_rectangle(
-        &Box2D { min: point(0.0, 1.0), max: point(2.0, 4.0 ) },
+        &Box2D {
+            min: point(0.0, 1.0),
+            max: point(2.0, 4.0),
+        },
         &FillOptions::DEFAULT,
         &mut Builder { next_vertex: 0 },
-    ).unwrap();
-
+    )
+    .unwrap();
 
     tess.tessellate_circle(
         point(1.0, 2.0),
         100.0,
         &FillOptions::DEFAULT,
         &mut Builder { next_vertex: 0 },
-    ).unwrap();
-
+    )
+    .unwrap();
 
     struct Builder {
         next_vertex: u32,
     }
 
     impl crate::GeometryBuilder for Builder {
-        fn begin_geometry(&mut self) {}
-        fn end_geometry(&mut self) -> Count {
-            Count {
-                vertices: self.next_vertex,
-                indices: 0,
-            }
-        }
-        fn abort_geometry(&mut self) {}
         fn add_triangle(&mut self, _: VertexId, _: VertexId, _: VertexId) {}
     }
 

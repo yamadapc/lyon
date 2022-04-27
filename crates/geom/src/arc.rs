@@ -5,10 +5,8 @@ use std::ops::Range;
 
 use crate::scalar::{cast, Float, Scalar};
 use crate::segment::{BoundingBox, Segment};
-use crate::CubicBezierSegment;
-use crate::Line;
-use crate::QuadraticBezierSegment;
-use crate::{point, vector, Angle, Point, Rotation, Transform, Vector, Box2D};
+use crate::{CubicBezierSegment, QuadraticBezierSegment, LineSegment, Line};
+use crate::{point, vector, Angle, Box2D, Point, Rotation, Transform, Vector};
 
 /// An elliptic arc curve segment.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -293,11 +291,15 @@ impl<S: Scalar> Arc<S> {
         arc
     }
 
-    /// Approximates the arc with a sequence of line segments.
+    /// Approximates the curve with sequence of line segments.
+    ///
+    /// The `tolerance` parameter defines the maximum distance between the curve and
+    /// its approximation.
     pub fn for_each_flattened<F>(&self, tolerance: S, callback: &mut F)
     where
-        F: FnMut(Point<S>),
+        F: FnMut(&LineSegment<S>),
     {
+        let mut from = self.from();
         let mut iter = *self;
         loop {
             let t = iter.flattening_step(tolerance);
@@ -305,20 +307,27 @@ impl<S: Scalar> Arc<S> {
                 break;
             }
             iter = iter.after_split(t);
-            callback(iter.from());
+            let to = iter.from();
+            callback(&LineSegment { from, to });
+            from = to;
         }
 
-        callback(iter.to());
+        callback(&LineSegment { from, to: self.to() });
     }
 
-    /// Iterates through the curve invoking a callback at each point.
+    /// Approximates the curve with sequence of line segments.
+    ///
+    /// The `tolerance` parameter defines the maximum distance between the curve and
+    /// its approximation.
+    ///
+    /// The end of the t parameter range at the final segment is guaranteed to be equal to `1.0`.
     pub fn for_each_flattened_with_t<F>(&self, tolerance: S, callback: &mut F)
     where
-        F: FnMut(Point<S>, S),
+        F: FnMut(&LineSegment<S>, Range<S>),
     {
-        let end = self.to();
         let mut iter = *self;
         let mut t0 = S::ZERO;
+        let mut from = self.from();
         loop {
             let step = iter.flattening_step(tolerance);
 
@@ -327,11 +336,14 @@ impl<S: Scalar> Arc<S> {
             }
 
             iter = iter.after_split(step);
-            t0 += step * (S::ONE - t0);
-            callback(iter.from(), t0);
+            let t1 = t0 + step * (S::ONE - t0);
+            let to = iter.from();
+            callback(&LineSegment { from, to, }, t0 .. t1);
+            from = to;
+            t0 = t1;
         }
 
-        callback(end, S::ONE);
+        callback(&LineSegment { from, to: self.to() }, t0 .. S::ONE);
     }
 
     /// Finds the interval of the beginning of the curve that can be approximated with a
@@ -465,11 +477,9 @@ impl<S: Scalar> Arc<S> {
     }
 
     pub fn approximate_length(&self, tolerance: S) -> S {
-        let mut from = self.from();
         let mut len = S::ZERO;
-        self.for_each_flattened(tolerance, &mut |to| {
-            len += (to - from).length();
-            from = to;
+        self.for_each_flattened(tolerance, &mut |segment| {
+            len += segment.length();
         });
 
         len
@@ -535,7 +545,7 @@ impl<S: Scalar> SvgArc<S> {
                     ctrl: self.from,
                     to: self.to,
                 },
-                S::ZERO .. S::ONE
+                S::ZERO..S::ONE,
             );
             return;
         }
@@ -561,14 +571,32 @@ impl<S: Scalar> SvgArc<S> {
         Arc::from_svg_arc(self).for_each_cubic_bezier(cb);
     }
 
-    /// Approximates the arc with a sequence of line segments.
-    pub fn for_each_flattened<F: FnMut(Point<S>)>(&self, tolerance: S, cb: &mut F) {
+    /// Approximates the curve with sequence of line segments.
+    ///
+    /// The `tolerance` parameter defines the maximum distance between the curve and
+    /// its approximation.
+    pub fn for_each_flattened<F: FnMut(&LineSegment<S>)>(&self, tolerance: S, cb: &mut F) {
         if self.is_straight_line() {
-            cb(self.to);
+            cb(&LineSegment { from: self.from, to: self.to });
             return;
         }
 
         Arc::from_svg_arc(self).for_each_flattened(tolerance, cb);
+    }
+
+    /// Approximates the curve with sequence of line segments.
+    ///
+    /// The `tolerance` parameter defines the maximum distance between the curve and
+    /// its approximation.
+    ///
+    /// The end of the t parameter range at the final segment is guaranteed to be equal to `1.0`.
+    pub fn for_each_flattened_with_t<F: FnMut(&LineSegment<S>, Range<S>)>(&self, tolerance: S, cb: &mut F) {
+        if self.is_straight_line() {
+            cb(&LineSegment { from: self.from, to: self.to }, S::ZERO .. S::ONE);
+            return;
+        }
+
+        Arc::from_svg_arc(self).for_each_flattened_with_t(tolerance, cb);
     }
 }
 
@@ -580,7 +608,7 @@ impl<S: Scalar> SvgArc<S> {
 /// four arcs are drawn, as follows:
 ///
 /// See more examples in the [SVG specification](https://svgwg.org/specs/paths/)
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 #[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
 pub struct ArcFlags {
     /// Of the four candidate arc sweeps, two will represent an arc sweep of greater
@@ -597,15 +625,6 @@ pub struct ArcFlags {
     /// angle value corresponding to the current point and decreases until the arc reaches
     /// the destination position).
     pub sweep: bool,
-}
-
-impl Default for ArcFlags {
-    fn default() -> Self {
-        ArcFlags {
-            large_arc: false,
-            sweep: false,
-        }
-    }
 }
 
 fn arc_to_quadratic_beziers_with_t<S, F>(arc: &Arc<S>, callback: &mut F)
@@ -641,11 +660,7 @@ where
         };
         let ctrl = l2.intersection(&l1).unwrap_or(from);
 
-        let t1 = if i + 1 == n {
-            S::ONE
-        } else {
-            t0 + dt
-        };
+        let t1 = if i + 1 == n { S::ONE } else { t0 + dt };
 
         callback(&QuadraticBezierSegment { from, ctrl, to }, t0..t1);
         t0 = t1;
@@ -735,6 +750,10 @@ impl<S: Scalar> Segment for Arc<S> {
     }
     fn approximate_length(&self, tolerance: S) -> S {
         self.approximate_length(tolerance)
+    }
+
+    fn for_each_flattened_with_t(&self, tolerance: Self::Scalar, callback: &mut dyn FnMut(&LineSegment<S>, Range<S>)) {
+        self.for_each_flattened_with_t(tolerance, &mut|s, t| callback(s, t));
     }
 }
 
@@ -1002,7 +1021,13 @@ fn test_bounding_box() {
         x_rotation: Angle::zero(),
     }
     .bounding_box();
-    assert!(approx_eq(r, Box2D { min: point(-1.0, 0.0), max: point(1.0, 1.0) }));
+    assert!(approx_eq(
+        r,
+        Box2D {
+            min: point(-1.0, 0.0),
+            max: point(1.0, 1.0)
+        }
+    ));
 
     let r = Arc {
         center: point(0.0, 0.0),
@@ -1012,7 +1037,13 @@ fn test_bounding_box() {
         x_rotation: Angle::pi(),
     }
     .bounding_box();
-    assert!(approx_eq(r, Box2D { min: point(-1.0, -1.0), max: point(1.0, 0.0) }));
+    assert!(approx_eq(
+        r,
+        Box2D {
+            min: point(-1.0, -1.0),
+            max: point(1.0, 0.0)
+        }
+    ));
 
     let r = Arc {
         center: point(0.0, 0.0),
@@ -1022,7 +1053,13 @@ fn test_bounding_box() {
         x_rotation: Angle::pi() * 0.5,
     }
     .bounding_box();
-    assert!(approx_eq(r, Box2D { min: point(-1.0, -2.0), max: point(0.0, 2.0) }));
+    assert!(approx_eq(
+        r,
+        Box2D {
+            min: point(-1.0, -2.0),
+            max: point(0.0, 2.0)
+        }
+    ));
 
     let r = Arc {
         center: point(1.0, 1.0),
@@ -1032,7 +1069,13 @@ fn test_bounding_box() {
         x_rotation: -Angle::pi() * 0.25,
     }
     .bounding_box();
-    assert!(approx_eq(r, Box2D { min: point(0.0, 0.0), max: point(1.707107, 1.707107) }));
+    assert!(approx_eq(
+        r,
+        Box2D {
+            min: point(0.0, 0.0),
+            max: point(1.707107, 1.707107)
+        }
+    ));
 
     let mut angle = Angle::zero();
     for _ in 0..10 {
@@ -1045,7 +1088,13 @@ fn test_bounding_box() {
             x_rotation: Angle::pi() * 0.25,
         }
         .bounding_box();
-        assert!(approx_eq(r, Box2D { min: point(-4.0, -4.0), max: point(4.0, 4.0) }));
+        assert!(approx_eq(
+            r,
+            Box2D {
+                min: point(-4.0, -4.0),
+                max: point(4.0, 4.0)
+            }
+        ));
         angle += Angle::pi() * 2.0 / 10.0;
     }
 
@@ -1060,7 +1109,13 @@ fn test_bounding_box() {
             x_rotation: angle,
         }
         .bounding_box();
-        assert!(approx_eq(r, Box2D { min: point(-4.0, -4.0), max: point(4.0, 4.0) }));
+        assert!(approx_eq(
+            r,
+            Box2D {
+                min: point(-4.0, -4.0),
+                max: point(4.0, 4.0)
+            }
+        ));
         angle += Angle::pi() * 2.0 / 10.0;
     }
 }

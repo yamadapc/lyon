@@ -360,7 +360,7 @@ impl<'l, Endpoint, ControlPoint> CommandsPathSlice<'l, Endpoint, ControlPoint> {
     /// and control point references.
     pub fn events(&self) -> Events<Endpoint, ControlPoint> {
         Events {
-            cmds: CmdIter::new(&self.cmds.cmds),
+            cmds: CmdIter::new(self.cmds.cmds),
             first_endpoint: 0,
             prev_endpoint: 0,
             endpoints: self.endpoints,
@@ -416,7 +416,6 @@ where
 #[derive(Clone)]
 pub struct PathCommandsBuilder {
     cmds: Vec<u32>,
-    start: u32,
     first_event_index: u32,
     in_subpath: bool,
 }
@@ -431,7 +430,6 @@ impl PathCommandsBuilder {
     /// Creates a builder without allocating memory.
     pub fn new() -> Self {
         Self {
-            start: 0,
             cmds: Vec::new(),
             in_subpath: false,
             first_event_index: 0,
@@ -441,7 +439,6 @@ impl PathCommandsBuilder {
     /// Creates a pre-allocated builder.
     pub fn with_capacity(cap: usize) -> Self {
         Self {
-            start: 0,
             cmds: Vec::with_capacity(cap),
             in_subpath: false,
             first_event_index: 0,

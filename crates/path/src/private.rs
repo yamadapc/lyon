@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 // This module contains a few helpers that should not be considered as part of the public API,
 // but are exposed for use by other lyon crates.
 // Changing them doesn't necessarily imply semver breaking bumps.
@@ -5,7 +7,7 @@
 pub use crate::geom::{CubicBezierSegment, QuadraticBezierSegment};
 pub use crate::math::Point;
 pub use crate::traits::PathBuilder;
-pub use crate::{EndpointId, Attributes};
+pub use crate::{Attributes, EndpointId};
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct DebugValidator {
@@ -76,16 +78,16 @@ pub fn flatten_quadratic_bezier(
     let curve = QuadraticBezierSegment { from, ctrl, to };
     let n = attributes.len();
     let mut id = EndpointId::INVALID;
-    curve.for_each_flattened_with_t(tolerance, &mut |point, t| {
-        let attr = if t == 1.0 {
+    curve.for_each_flattened_with_t(tolerance, &mut |line, t| {
+        let attr = if t.end == 1.0 {
             attributes
         } else {
             for i in 0..n {
-                buffer[i] = prev_attributes[i] * (1.0 - t) + attributes[i] * t;
+                buffer[i] = prev_attributes[i] * (1.0 - t.end) + attributes[i] * t.end;
             }
             Attributes(&buffer[..])
         };
-        id = builder.line_to(point, attr);
+        id = builder.line_to(line.to, attr);
     });
 
     id
@@ -110,16 +112,16 @@ pub fn flatten_cubic_bezier(
     };
     let n = attributes.len();
     let mut id = EndpointId::INVALID;
-    curve.for_each_flattened_with_t(tolerance, &mut |point, t| {
-        let attr = if t == 1.0 {
+    curve.for_each_flattened_with_t(tolerance, &mut |line, t| {
+        let attr = if t.end == 1.0 {
             attributes
         } else {
             for i in 0..n {
-                buffer[i] = prev_attributes[i] * (1.0 - t) + attributes[i] * t;
+                buffer[i] = prev_attributes[i] * (1.0 - t.end) + attributes[i] * t.end;
             }
             Attributes(&buffer[..])
         };
-        id = builder.line_to(point, attr);
+        id = builder.line_to(line.to, attr);
     });
 
     id

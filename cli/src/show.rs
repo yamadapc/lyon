@@ -9,13 +9,12 @@ use wgpu::util::DeviceExt;
 use futures::executor::block_on;
 use std::ops::Rem;
 
-use crate::commands::{AntiAliasing, Background, RenderCmd, TessellateCmd, Tessellator};
+use crate::commands::{AntiAliasing, Background, RenderCmd, TessellateCmd};
 use lyon::algorithms::aabb::bounding_box;
 use lyon::algorithms::hatching::*;
 use lyon::geom::LineSegment;
 use lyon::math::*;
 use lyon::path::Path;
-use lyon::tess2;
 use lyon::tessellation;
 use lyon::tessellation::geometry_builder::*;
 use lyon::tessellation::{FillOptions, FillTessellator, StrokeTessellator};
@@ -103,37 +102,24 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
     let mut stroke = StrokeTessellator::new();
 
     if let Some(options) = cmd.fill {
-        match cmd.tessellator {
-            Tessellator::Default => {
-                fill.tessellate(
-                    &cmd.path,
-                    &options,
-                    &mut BuffersBuilder::new(&mut geometry, WithId(fill_prim_id)),
-                )
-                .unwrap();
+        fill.tessellate(
+            &cmd.path,
+            &options,
+            &mut BuffersBuilder::new(&mut geometry, WithId(fill_prim_id)),
+        )
+        .unwrap();
 
-                //for (i, v) in geometry.vertices.iter().enumerate() {
-                //    println!("{}: {:?}", i, v.position);
-                //}
-                //for i in 0..(geometry.indices.len() / 3) {
-                //    println!(
-                //        "{}/{}/{}",
-                //        geometry.indices[i * 3],
-                //        geometry.indices[i * 3 + 1],
-                //        geometry.indices[i * 3 + 2],
-                //    );
-                //}
-            }
-            Tessellator::Tess2 => {
-                tess2::FillTessellator::new()
-                    .tessellate_path(
-                        &cmd.path,
-                        &options,
-                        &mut tess2::geometry_builder::BuffersBuilder::new(&mut geometry, WithId(0)),
-                    )
-                    .unwrap();
-            }
-        }
+        //for (i, v) in geometry.vertices.iter().enumerate() {
+        //    println!("{}: {:?}", i, v.position);
+        //}
+        //for i in 0..(geometry.indices.len() / 3) {
+        //    println!(
+        //        "{}/{}/{}",
+        //        geometry.indices[i * 3],
+        //        geometry.indices[i * 3 + 1],
+        //        geometry.indices[i * 3 + 2],
+        //    );
+        //}
     }
 
     if let Some(options) = cmd.stroke {
@@ -212,7 +198,10 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
     let mut bg_geometry: VertexBuffers<BgVertex, u32> = VertexBuffers::new();
 
     fill.tessellate_rectangle(
-        &Box2D { min: point(-1.0, -1.0), max: point(1.0, 1.0) },
+        &Box2D {
+            min: point(-1.0, -1.0),
+            max: point(1.0, 1.0),
+        },
         &FillOptions::DEFAULT,
         &mut BuffersBuilder::new(&mut bg_geometry, BgVertexCtor),
     )
@@ -458,13 +447,11 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
         fragment: Some(wgpu::FragmentState {
             module: &fs_module,
             entry_point: "main",
-            targets: &[
-                wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-            ],
+            targets: &[wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }],
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -472,7 +459,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             front_face: wgpu::FrontFace::Ccw,
             strip_index_format: None,
             cull_mode: Some(wgpu::Face::Back),
-            clamp_depth: false,
+            unclipped_depth: false,
             conservative: false,
         },
         depth_stencil: depth_stencil_state.clone(),
@@ -481,12 +468,11 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
+        multiview: None,
     };
 
     let render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
 
-    // TODO: this isn't what we want: we'd need the equivalent of VK_POLYGON_MODE_LINE,
-    // but it doesn't seem to be exposed by wgpu?
     render_pipeline_descriptor.primitive.topology = wgpu::PrimitiveTopology::LineList;
     let wireframe_render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
 
@@ -516,13 +502,11 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
         fragment: Some(wgpu::FragmentState {
             module: &bg_fs_module,
             entry_point: "main",
-            targets: &[
-                wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-            ],
+            targets: &[wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }],
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -530,7 +514,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             front_face: wgpu::FrontFace::Ccw,
             strip_index_format: None,
             cull_mode: None,
-            clamp_depth: false,
+            unclipped_depth: false,
             conservative: false,
         },
         depth_stencil: depth_stencil_state.clone(),
@@ -539,6 +523,7 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
+        multiview: None,
     });
 
     let size = window.inner_size();
@@ -607,7 +592,9 @@ pub fn show_path(cmd: TessellateCmd, render_options: RenderCmd) {
             }
         };
 
-        let frame_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let frame_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Encoder"),
@@ -779,18 +766,6 @@ impl FillVertexConstructor<BgVertex> for BgVertexCtor {
     fn new_vertex(&mut self, vertex: tessellation::FillVertex) -> BgVertex {
         BgVertex {
             point: vertex.position().to_array(),
-        }
-    }
-}
-
-impl tess2::geometry_builder::BasicVertexConstructor<GpuVertex> for WithId {
-    fn new_vertex(&mut self, position: Point) -> GpuVertex {
-        debug_assert!(!position.x.is_nan());
-        debug_assert!(!position.y.is_nan());
-        GpuVertex {
-            position: position.to_array(),
-            normal: [0.0, 0.0],
-            prim_id: self.0 as u32,
         }
     }
 }

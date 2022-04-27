@@ -90,10 +90,7 @@ mod segment;
 pub mod arc;
 pub mod cubic_bezier;
 mod cubic_bezier_intersections;
-pub mod cubic_to_quadratic;
-mod flatten_cubic;
 mod line;
-mod monotonic;
 pub mod quadratic_bezier;
 mod triangle;
 pub mod utils;
@@ -105,11 +102,9 @@ pub use crate::cubic_bezier::CubicBezierSegment;
 #[doc(inline)]
 pub use crate::line::{Line, LineEquation, LineSegment};
 #[doc(inline)]
-pub use crate::monotonic::Monotonic;
-#[doc(inline)]
 pub use crate::quadratic_bezier::QuadraticBezierSegment;
 #[doc(inline)]
-pub use crate::segment::{BezierSegment, Segment};
+pub use crate::segment::Segment;
 #[doc(inline)]
 pub use crate::triangle::Triangle;
 
@@ -149,13 +144,18 @@ mod scalar {
         const NINE: Self;
         const TEN: Self;
 
+        const MIN: Self;
+        const MAX: Self;
+
         const EPSILON: Self;
         const DIV_EPSILON: Self = Self::EPSILON;
 
         /// Epsilon constants are usually not a good way to deal with float precision.
         /// Float precision depends on the magnitude of the values and so should appropriate
         /// epsilons.
-        fn epsilon_for(_reference: Self) -> Self { Self::EPSILON }
+        fn epsilon_for(_reference: Self) -> Self {
+            Self::EPSILON
+        }
 
         fn value(v: f32) -> Self;
     }
@@ -174,6 +174,9 @@ mod scalar {
         const NINE: Self = 9.0;
         const TEN: Self = 10.0;
 
+        const MIN: Self = std::f32::MIN;
+        const MAX: Self = std::f32::MAX;
+
         const EPSILON: Self = 1e-4;
 
         #[inline]
@@ -188,11 +191,11 @@ mod scalar {
             // TODO: instead of casting to an integer, could look at the exponent directly.
             let magnitude = reference.abs() as i32;
             match magnitude {
-                0 ..= 7 => 1e-5,
-                8 ..= 1023 => 1e-3,
-                1024 ..= 4095 => 1e-2,
-                5096 ..= 65535 => 1e-1,
-                65536 ..= 8_388_607 => 0.5,
+                0..=7 => 1e-5,
+                8..=1023 => 1e-3,
+                1024..=4095 => 1e-2,
+                5096..=65535 => 1e-1,
+                65536..=8_388_607 => 0.5,
                 _ => 1.0,
             }
         }
@@ -215,6 +218,9 @@ mod scalar {
         const NINE: Self = 9.0;
         const TEN: Self = 10.0;
 
+        const MIN: Self = std::f64::MIN;
+        const MAX: Self = std::f64::MAX;
+
         const EPSILON: Self = 1e-8;
 
         #[inline]
@@ -225,9 +231,9 @@ mod scalar {
         fn epsilon_for(reference: Self) -> Self {
             let magnitude = reference.abs() as i64;
             match magnitude {
-                0 ..= 65_535 => 1e-8,
-                65_536 ..=  83_88_607 => 1e-5,
-                83_88_608 ..= 4_294_967_295 => 1e-3,
+                0..=65_535 => 1e-8,
+                65_536..=8_388_607 => 1e-5,
+                8_388_608..=4_294_967_295 => 1e-3,
                 _ => 1e-1,
             }
         }
@@ -281,7 +287,6 @@ pub fn size<S>(w: S, h: S) -> Size<S> {
 
 pub mod traits {
     pub use crate::segment::Segment;
-    //pub use monotonic::MonotonicSegment;
 
     use crate::{Point, Rotation, Scalar, Scale, Transform, Translation, Vector};
 

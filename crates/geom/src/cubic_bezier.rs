@@ -1,13 +1,10 @@
+
 use crate::cubic_bezier_intersections::cubic_bezier_intersections_t;
-use crate::cubic_to_quadratic::*;
-pub use crate::flatten_cubic::Flattened;
-use crate::flatten_cubic::{find_cubic_bezier_inflection_points, flatten_cubic_bezier_with_t};
-use crate::monotonic::Monotonic;
 use crate::scalar::Scalar;
 use crate::segment::{BoundingBox, Segment};
 use crate::traits::Transformation;
 use crate::utils::{cubic_polynomial_roots, min_max};
-use crate::{Point, Vector, Box2D, point};
+use crate::{point, Box2D, Point, Vector};
 use crate::{Line, LineEquation, LineSegment, QuadraticBezierSegment};
 use arrayvec::ArrayVec;
 
@@ -72,11 +69,9 @@ impl<S: Scalar> CubicBezierSegment<S> {
     }
 
     /// Return the parameter values corresponding to a given x coordinate.
-    /// See also solve_t_for_x for monotonic curves.
     pub fn solve_t_for_x(&self, x: S) -> ArrayVec<S, 3> {
-        if self.is_a_point(S::ZERO)
-            || (self.non_point_is_linear(S::ZERO) && self.from.x == self.to.x)
-        {
+        let (min, max) = self.fast_bounding_range_x();
+        if min > x || max < x {
             return ArrayVec::new();
         }
 
@@ -84,11 +79,9 @@ impl<S: Scalar> CubicBezierSegment<S> {
     }
 
     /// Return the parameter values corresponding to a given y coordinate.
-    /// See also solve_t_for_y for monotonic curves.
     pub fn solve_t_for_y(&self, y: S) -> ArrayVec<S, 3> {
-        if self.is_a_point(S::ZERO)
-            || (self.non_point_is_linear(S::ZERO) && self.from.y == self.to.y)
-        {
+        let (min, max) = self.fast_bounding_range_y();
+        if min > y || max < y {
             return ArrayVec::new();
         }
 
@@ -244,22 +237,34 @@ impl<S: Scalar> CubicBezierSegment<S> {
         }
     }
 
+    /// Returns true if the curve can be approximated with a single line segment, given
+    /// a tolerance threshold.
     pub fn is_linear(&self, tolerance: S) -> bool {
-        let epsilon = S::EPSILON;
-        if (self.from - self.to).square_length() < epsilon {
-            return false;
-        }
+        // Similar to Line::square_distance_to_point, except we keep
+        // the sign of c1 and c2 to compute tighter upper bounds as we
+        // do in fat_line_min_max.
+        let baseline = self.to - self.from;
+        let v1 = self.ctrl1 - self.from;
+        let v2 = self.ctrl2 - self.from;
+        let c1 = baseline.cross(v1);
+        let c2 = baseline.cross(v2);
+        let d1 = (c1 * c1) / baseline.square_length();
+        let d2 = (c2 * c2) / baseline.square_length();
 
-        self.non_point_is_linear(tolerance)
+        let factor = if (c1 * c2) > S::ZERO {
+            S::THREE / S::FOUR
+        } else {
+            S::FOUR / S::NINE
+        };
+
+        let f2 = factor * factor;
+        let threshold = tolerance * tolerance;
+
+        d1 * f2 <= threshold && d2 <= threshold
     }
 
-    #[inline]
-    fn non_point_is_linear(&self, tolerance: S) -> bool {
-        let line = self.baseline().to_line().equation();
-        line.distance_to_point(&self.ctrl1) <= tolerance
-            && line.distance_to_point(&self.ctrl2) <= tolerance
-    }
-
+    /// Returns whether the curve can be approximated with a single point, given
+    /// a tolerance threshold.
     pub(crate) fn is_a_point(&self, tolerance: S) -> bool {
         let tolerance_squared = tolerance * tolerance;
         // Use <= so that tolerance can be zero.
@@ -324,65 +329,173 @@ impl<S: Scalar> CubicBezierSegment<S> {
         }
     }
 
+    /// Approximate the curve with a single quadratic bézier segment.
+    ///
+    /// This is terrible as a general approximation but works if the cubic
+    /// curve does not have inflection points and is "flat" enough. Typically
+    /// usable after subdividing the curve a few times.
+    pub fn to_quadratic(&self) -> QuadraticBezierSegment<S> {
+        let c1 = (self.ctrl1 * S::THREE - self.from) * S::HALF;
+        let c2 = (self.ctrl2 * S::THREE - self.to) * S::HALF;
+        QuadraticBezierSegment {
+            from: self.from,
+            ctrl: ((c1 + c2) * S::HALF).to_point(),
+            to: self.to,
+        }
+    }
+
+    /// Evaluates an upper bound on the maximum distance between the curve
+    /// and its quadratic approximation obtained using `to_quadratic`.
+    pub fn to_quadratic_error(&self) -> S {
+        // See http://caffeineowl.com/graphics/2d/vectorial/cubic2quad01.html
+        S::sqrt(S::THREE) / S::value(36.0)
+            * ((self.to - self.ctrl2 * S::THREE) + (self.ctrl1 * S::THREE - self.from)).length()
+    }
+
+    /// Returns true if the curve can be safely approximated with a single quadratic bézier
+    /// segment given the provided tolerance threshold.
+    ///
+    /// Equivalent to comparing `to_quadratic_error` with the tolerance threshold, avoiding
+    /// the cost of two square roots.
+    pub fn is_quadratic(&self, tolerance: S) -> bool {
+        S::THREE / S::value(1296.0)
+            * ((self.to - self.ctrl2 * S::THREE) + (self.ctrl1 * S::THREE - self.from))
+                .square_length()
+            <= tolerance * tolerance
+    }
+
+    /// Computes the number of quadratic bézier segments required to approximate this cubic curve
+    /// given a tolerance threshold.
+    ///
+    /// Derived by Raph Levien from section 10.6 of Sedeberg's CAGD notes
+    /// <https://scholarsarchive.byu.edu/cgi/viewcontent.cgi?article=1000&context=facpub#section.10.6>
+    /// and the error metric from the caffein owl blog post <http://caffeineowl.com/graphics/2d/vectorial/cubic2quad01.html>
+    pub fn num_quadratics(&self, tolerance: S) -> u32 {
+        self.num_quadratics_impl(tolerance).to_u32().unwrap_or(1)
+    }
+
+    fn num_quadratics_impl(&self, tolerance: S) -> S {
+        debug_assert!(tolerance > S::ZERO);
+
+        let x = self.from.x - S::THREE * self.ctrl1.x + S::THREE * self.ctrl2.x - self.to.x;
+        let y = self.from.y - S::THREE * self.ctrl1.y + S::THREE * self.ctrl2.y - self.to.y;
+
+        let err = x * x + y * y;
+
+        (err / (S::value(432.0) * tolerance * tolerance))
+            .powf(S::ONE / S::SIX)
+            .ceil()
+            .max(S::ONE)
+    }
+
     /// Returns the flattened representation of the curve as an iterator, starting *after* the
     /// current point.
     pub fn flattened(&self, tolerance: S) -> Flattened<S> {
         Flattened::new(self, tolerance)
     }
 
-    /// Invokes a callback between each monotonic part of the segment.
-    pub fn for_each_monotonic_t<F>(&self, mut cb: F)
+    /// Invokes a callback for each monotonic part of the segment.
+    pub fn for_each_monotonic_range<F>(&self, cb: &mut F)
     where
-        F: FnMut(S),
+        F: FnMut(Range<S>),
     {
-        let mut x_extrema: ArrayVec<S, 3> = ArrayVec::new();
-        self.for_each_local_x_extremum_t(&mut |t| x_extrema.push(t));
+        let mut extrema: ArrayVec<S, 4> = ArrayVec::new();
+        self.for_each_local_x_extremum_t(&mut |t| extrema.push(t));
+        self.for_each_local_y_extremum_t(&mut |t| extrema.push(t));
+        extrema.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let mut y_extrema: ArrayVec<S, 3> = ArrayVec::new();
-        self.for_each_local_y_extremum_t(&mut |t| y_extrema.push(t));
-
-        let mut it_x = x_extrema.iter().cloned();
-        let mut it_y = y_extrema.iter().cloned();
-        let mut tx = it_x.next();
-        let mut ty = it_y.next();
-        loop {
-            let next = match (tx, ty) {
-                (Some(a), Some(b)) => {
-                    if a < b {
-                        tx = it_x.next();
-                        a
-                    } else {
-                        ty = it_y.next();
-                        b
-                    }
-                }
-                (Some(a), None) => {
-                    tx = it_x.next();
-                    a
-                }
-                (None, Some(b)) => {
-                    ty = it_y.next();
-                    b
-                }
-                (None, None) => return,
-            };
-            if next > S::ZERO && next < S::ONE {
-                cb(next);
+        let mut t0 = S::ZERO;
+        for &t in &extrema {
+            if t != t0 {
+                cb(t0 .. t);
+                t0 = t;
             }
         }
+
+        cb(t0 .. S::ONE);
     }
 
-    /// Invokes a callback for each monotonic part of the segment..
-    pub fn for_each_monotonic_range<F>(&self, mut cb: F)
+    /// Invokes a callback for each monotonic part of the segment.
+    pub fn for_each_monotonic<F>(&self, cb: &mut F)
+    where
+        F: FnMut(&CubicBezierSegment<S>),
+    {
+        self.for_each_monotonic_range(&mut |range| {
+            let mut sub = self.split_range(range);
+            // Due to finite precision the split may actually result in sub-curves
+            // that are almost but not-quite monotonic. Make sure they actually are.
+            let min_x = sub.from.x.min(sub.to.x);
+            let max_x = sub.from.x.max(sub.to.x);
+            let min_y = sub.from.y.min(sub.to.y);
+            let max_y = sub.from.y.max(sub.to.y);
+            sub.ctrl1.x = sub.ctrl1.x.max(min_x).min(max_x);
+            sub.ctrl1.y = sub.ctrl1.y.max(min_y).min(max_y);
+            sub.ctrl2.x = sub.ctrl2.x.max(min_x).min(max_x);
+            sub.ctrl2.y = sub.ctrl2.y.max(min_y).min(max_y);
+            cb(&sub);
+        });
+    }
+
+    /// Invokes a callback for each y-monotonic part of the segment.
+    pub fn for_each_y_monotonic_range<F>(&self, cb: &mut F)
     where
         F: FnMut(Range<S>),
     {
         let mut t0 = S::ZERO;
-        self.for_each_monotonic_t(|t| {
-            cb(t0..t);
+        self.for_each_local_y_extremum_t(&mut |t| {
+            cb(t0 .. t);
             t0 = t;
         });
-        cb(t0..S::ONE);
+
+        cb(t0 .. S::ONE);
+    }
+
+    /// Invokes a callback for each y-monotonic part of the segment.
+    pub fn for_each_y_monotonic<F>(&self, cb: &mut F)
+    where
+        F: FnMut(&CubicBezierSegment<S>),
+    {
+        self.for_each_y_monotonic_range(&mut |range| {
+            let mut sub = self.split_range(range);
+            // Due to finite precision the split may actually result in sub-curves
+            // that are almost but not-quite monotonic. Make sure they actually are.
+            let min_y = sub.from.y.min(sub.to.y);
+            let max_y = sub.from.y.max(sub.to.y);
+            sub.ctrl1.y = sub.ctrl1.y.max(min_y).min(max_y);
+            sub.ctrl2.y = sub.ctrl2.y.max(min_y).min(max_y);
+            cb(&sub);
+        });
+    }
+
+    /// Invokes a callback for each x-monotonic part of the segment.
+    pub fn for_each_x_monotonic_range<F>(&self, cb: &mut F)
+    where
+        F: FnMut(Range<S>),
+    {
+        let mut t0 = S::ZERO;
+        self.for_each_local_x_extremum_t(&mut |t| {
+            cb(t0 .. t);
+            t0 = t;
+        });
+
+        cb(t0 .. S::ONE);
+    }
+
+    /// Invokes a callback for each x-monotonic part of the segment.
+    pub fn for_each_x_monotonic<F>(&self, cb: &mut F)
+    where
+        F: FnMut(&CubicBezierSegment<S>),
+    {
+        self.for_each_x_monotonic_range(&mut |range| {
+            let mut sub = self.split_range(range);
+            // Due to finite precision the split may actually result in sub-curves
+            // that are almost but not-quite monotonic. Make sure they actually are.
+            let min_x = sub.from.x.min(sub.to.x);
+            let max_x = sub.from.x.max(sub.to.x);
+            sub.ctrl1.x = sub.ctrl1.x.max(min_x).min(max_x);
+            sub.ctrl2.x = sub.ctrl2.x.max(min_x).min(max_x);
+            cb(&sub);
+        });
     }
 
     /// Approximates the cubic bézier curve with sequence of quadratic ones,
@@ -391,7 +504,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
     where
         F: FnMut(&QuadraticBezierSegment<S>),
     {
-        cubic_to_quadratics(self, tolerance, cb);
+        self.for_each_quadratic_bezier_with_t(tolerance, &mut |quad, _range| cb(quad));
     }
 
     /// Approximates the cubic bézier curve with sequence of quadratic ones,
@@ -400,47 +513,162 @@ impl<S: Scalar> CubicBezierSegment<S> {
     where
         F: FnMut(&QuadraticBezierSegment<S>, Range<S>),
     {
-        cubic_to_quadratics_with_t(self, tolerance, cb);
+        debug_assert!(tolerance >= S::EPSILON * S::EPSILON);
+
+        let num_quadratics = self.num_quadratics_impl(tolerance);
+        let step = S::ONE / num_quadratics;
+        let n = num_quadratics.to_u32().unwrap_or(1);
+        let mut t0 = S::ZERO;
+        for _ in 0..(n - 1) {
+            let t1 = t0 + step;
+
+            let quad = self.split_range(t0..t1).to_quadratic();
+            cb(&quad, t0..t1);
+
+            t0 = t1;
+        }
+
+        // Do the last step manually to make sure we finish at t = 1.0 exactly.
+        let quad = self.split_range(t0..S::ONE).to_quadratic();
+        cb(&quad, t0..S::ONE)
     }
 
-    /// Approximates the cubic bézier curve with sequence of monotonic quadratic
-    /// ones, invoking a callback at each step.
-    pub fn for_each_monotonic_quadratic<F>(&self, tolerance: S, cb: &mut F)
-    where
-        F: FnMut(&Monotonic<QuadraticBezierSegment<S>>),
-    {
-        cubic_to_monotonic_quadratics(self, tolerance, cb);
-    }
+    /// Approximates the curve with sequence of line segments.
+    ///
+    /// The `tolerance` parameter defines the maximum distance between the curve and
+    /// its approximation.
+    pub fn for_each_flattened<F: FnMut(&LineSegment<S>)>(&self, tolerance: S, callback: &mut F) {
+        debug_assert!(tolerance >= S::EPSILON * S::EPSILON);
+        let quadratics_tolerance = tolerance * S::value(0.4);
+        let flattening_tolerance = tolerance * S::value(0.8);
 
-    /// Iterates through the curve invoking a callback at each point.
-    pub fn for_each_flattened<F: FnMut(Point<S>)>(&self, tolerance: S, callback: &mut F) {
-        flatten_cubic_bezier_with_t(self, tolerance, &mut |point, _| {
-            callback(point);
+        self.for_each_quadratic_bezier(quadratics_tolerance, &mut |quad| {
+            quad.for_each_flattened(flattening_tolerance, &mut |segment| {
+                callback(segment);
+            });
         });
     }
 
-    /// Iterates through the curve invoking a callback at each point.
-    pub fn for_each_flattened_with_t<F: FnMut(Point<S>, S)>(&self, tolerance: S, callback: &mut F) {
-        flatten_cubic_bezier_with_t(self, tolerance, callback);
+    /// Approximates the curve with sequence of line segments.
+    ///
+    /// The `tolerance` parameter defines the maximum distance between the curve and
+    /// its approximation.
+    ///
+    /// The end of the t parameter range at the final segment is guaranteed to be equal to `1.0`.
+    pub fn for_each_flattened_with_t<F: FnMut(&LineSegment<S>, Range<S>)>(&self, tolerance: S, callback: &mut F) {
+        debug_assert!(tolerance >= S::EPSILON * S::EPSILON);
+        let quadratics_tolerance = tolerance * S::value(0.4);
+        let flattening_tolerance = tolerance * S::value(0.8);
+
+        let mut t_from = S::ZERO;
+        self.for_each_quadratic_bezier_with_t(quadratics_tolerance, &mut |quad, range| {
+            let last_quad = range.end == S::ONE;
+            let range_len = range.end - range.start;
+            quad.for_each_flattened_with_t(flattening_tolerance, &mut |segment, range_sub| {
+                let last_seg = range_sub.end == S::ONE;
+                let t = if last_quad && last_seg {
+                    S::ONE
+                } else {
+                    range_sub.end * range_len + range.start
+                };
+                callback(segment, t_from..t);
+                t_from = t;
+            });
+        });
     }
 
     /// Compute the length of the segment using a flattened approximation.
     pub fn approximate_length(&self, tolerance: S) -> S {
-        let mut from = self.from;
-        let mut len = S::ZERO;
-        self.for_each_flattened(tolerance, &mut |to| {
-            len += (to - from).length();
-            from = to;
+        let mut length = S::ZERO;
+
+        self.for_each_quadratic_bezier(tolerance, &mut|quad| {
+            length += quad.length();
         });
 
-        len
+        length
     }
 
+    /// Invokes a callback at each inflection point if any.
     pub fn for_each_inflection_t<F>(&self, cb: &mut F)
     where
         F: FnMut(S),
     {
-        find_cubic_bezier_inflection_points(self, cb);
+        // Find inflection points.
+        // See www.faculty.idc.ac.il/arik/quality/appendixa.html for an explanation
+        // of this approach.
+        let pa = self.ctrl1 - self.from;
+        let pb =
+            self.ctrl2.to_vector() - (self.ctrl1.to_vector() * S::TWO) + self.from.to_vector();
+        let pc = self.to.to_vector() - (self.ctrl2.to_vector() * S::THREE)
+            + (self.ctrl1.to_vector() * S::THREE)
+            - self.from.to_vector();
+
+        let a = pb.cross(pc);
+        let b = pa.cross(pc);
+        let c = pa.cross(pb);
+
+        if S::abs(a) < S::EPSILON {
+            // Not a quadratic equation.
+            if S::abs(b) < S::EPSILON {
+                // Instead of a linear acceleration change we have a constant
+                // acceleration change. This means the equation has no solution
+                // and there are no inflection points, unless the constant is 0.
+                // In that case the curve is a straight line, essentially that means
+                // the easiest way to deal with is is by saying there's an inflection
+                // point at t == 0. The inflection point approximation range found will
+                // automatically extend into infinity.
+                if S::abs(c) < S::EPSILON {
+                    cb(S::ZERO);
+                }
+            } else {
+                let t = -c / b;
+                if in_range(t) {
+                    cb(t);
+                }
+            }
+
+            return;
+        }
+
+        fn in_range<S: Scalar>(t: S) -> bool {
+            t >= S::ZERO && t < S::ONE
+        }
+
+        let discriminant = b * b - S::FOUR * a * c;
+
+        if discriminant < S::ZERO {
+            return;
+        }
+
+        if discriminant < S::EPSILON {
+            let t = -b / (S::TWO * a);
+
+            if in_range(t) {
+                cb(t);
+            }
+
+            return;
+        }
+
+        // This code is derived from https://www2.units.it/ipl/students_area/imm2/files/Numerical_Recipes.pdf page 184.
+        // Computing the roots this way avoids precision issues when a, c or both are small.
+        let discriminant_sqrt = S::sqrt(discriminant);
+        let sign_b = if b >= S::ZERO { S::ONE } else { -S::ONE };
+        let q = -S::HALF * (b + sign_b * discriminant_sqrt);
+        let mut first_inflection = q / a;
+        let mut second_inflection = c / q;
+
+        if first_inflection > second_inflection {
+            std::mem::swap(&mut first_inflection, &mut second_inflection);
+        }
+
+        if in_range(first_inflection) {
+            cb(first_inflection);
+        }
+
+        if in_range(second_inflection) {
+            cb(second_inflection);
+        }
     }
 
     /// Return local x extrema or None if this curve is monotonic.
@@ -509,8 +737,11 @@ impl<S: Scalar> CubicBezierSegment<S> {
         // There are two Real solutions for the equation
         let discriminant_sqrt = discriminant.sqrt();
 
-        let first_extremum = (-b - discriminant_sqrt) / (S::TWO * a);
-        let second_extremum = (-b + discriminant_sqrt) / (S::TWO * a);
+        let mut first_extremum = (-b - discriminant_sqrt) / (S::TWO * a);
+        let mut second_extremum = (-b + discriminant_sqrt) / (S::TWO * a);
+        if first_extremum > second_extremum {
+            std::mem::swap(&mut first_extremum, &mut second_extremum);
+        }
 
         if in_range(first_extremum) {
             cb(first_extremum);
@@ -610,7 +841,10 @@ impl<S: Scalar> CubicBezierSegment<S> {
         let (min_x, max_x) = self.fast_bounding_range_x();
         let (min_y, max_y) = self.fast_bounding_range_y();
 
-        Box2D { min: point(min_x, min_y), max: point(max_x, max_y) }
+        Box2D {
+            min: point(min_x, min_y),
+            max: point(max_x, max_y),
+        }
     }
 
     /// Returns a conservative range of x that contains this curve.
@@ -657,7 +891,10 @@ impl<S: Scalar> CubicBezierSegment<S> {
         let (min_x, max_x) = self.bounding_range_x();
         let (min_y, max_y) = self.bounding_range_y();
 
-        Box2D { min: point(min_x, min_y), max: point(max_x, max_y) }
+        Box2D {
+            min: point(min_x, min_y),
+            max: point(max_x, max_y),
+        }
     }
 
     /// Returns the smallest range of x that contains this curve.
@@ -676,12 +913,6 @@ impl<S: Scalar> CubicBezierSegment<S> {
         let max_y = self.y(self.y_maximum_t());
 
         (min_y, max_y)
-    }
-
-    /// Cast this curve into a monotonic curve without checking that the monotonicity
-    /// assumption is correct.
-    pub fn assume_monotonic(&self) -> MonotonicCubicBezierSegment<S> {
-        MonotonicCubicBezierSegment { segment: *self }
     }
 
     /// Returns whether this segment is monotonic on the x axis.
@@ -839,7 +1070,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
 
     /// Computes the intersection points (if any) between this segment and a line.
     pub fn line_intersections(&self, line: &Line<S>) -> ArrayVec<Point<S>, 3> {
-        let intersections = self.line_intersections_t(&line);
+        let intersections = self.line_intersections_t(line);
 
         let mut result = ArrayVec::new();
         for t in intersections {
@@ -856,7 +1087,8 @@ impl<S: Scalar> CubicBezierSegment<S> {
     /// the segments at the corresponding values.
     pub fn line_segment_intersections_t(&self, segment: &LineSegment<S>) -> ArrayVec<(S, S), 3> {
         if !self
-            .fast_bounding_box().inflate(S::EPSILON, S::EPSILON)
+            .fast_bounding_box()
+            .inflate(S::EPSILON, S::EPSILON)
             .intersects(&segment.bounding_box().inflate(S::EPSILON, S::EPSILON))
         {
             return ArrayVec::new();
@@ -906,7 +1138,7 @@ impl<S: Scalar> CubicBezierSegment<S> {
     }
 
     pub fn line_segment_intersections(&self, segment: &LineSegment<S>) -> ArrayVec<Point<S>, 3> {
-        let intersections = self.line_segment_intersections_t(&segment);
+        let intersections = self.line_segment_intersections_t(segment);
 
         let mut result = ArrayVec::new();
         for (t, _) in intersections {
@@ -915,10 +1147,124 @@ impl<S: Scalar> CubicBezierSegment<S> {
 
         result
     }
+
+    fn baseline_projection(&self, t: S) -> S {
+        // See https://pomax.github.io/bezierinfo/#abc
+        // We are computing the interpolation factor between
+        // `from` and `to` to get the position of C.
+        let one_t = S::ONE - t;
+        let one_t3 = one_t * one_t * one_t;
+        let t3 = t * t * t;
+
+        t3 / (t3 + one_t3)
+    }
+
+    fn abc_ratio(&self, t: S) -> S {
+        // See https://pomax.github.io/bezierinfo/#abc
+        let one_t = S::ONE - t;
+        let one_t3 = one_t * one_t * one_t;
+        let t3 = t * t * t;
+
+        ((t3 + one_t3 - S::ONE) / (t3 + one_t3)).abs()
+    }
+
+    // Returns a quadratic bézier curve built by dragging this curve's point at `t`
+    // to a new position, without moving the endpoints.
+    //
+    // The relative effect on control points is chosen to give a similar "feel" to
+    // most vector graphics editors: dragging from near the first endpoint will affect
+    // the first control point more than the second control point, etc.
+    pub fn drag(&self, t: S, new_position: Point<S>) -> Self {
+        // A lot of tweaking could go into making the weight feel as natural as possible.
+        let min = S::value(0.1);
+        let max = S::value(0.9);
+        let weight = if t < min {
+            S::ZERO
+        } else if t > max {
+            S::ONE
+        } else {
+            (t - min) / (max - min)
+        };
+
+        self.drag_with_weight(t, new_position, weight)
+    }
+
+    // Returns a quadratic bézier curve built by dragging this curve's point at `t`
+    // to a new position, without moving the endpoints.
+    //
+    // The provided weight specifies the relative effect on control points.
+    //  - with `weight = 0.5`, `ctrl1` and `ctrl2` are equally affected,
+    //  - with `weight = 0.0`, only `ctrl1` is affected,
+    //  - with `weight = 1.0`, only `ctrl2` is affected,
+    //  - etc.
+    pub fn drag_with_weight(&self, t: S, new_position: Point<S>, weight: S) -> Self {
+        // See https://pomax.github.io/bezierinfo/#abc
+        //
+        //   From-----------Ctrl1
+        //    |               \ d1     \
+        //    C-------P--------A        \  d12
+        //    |                 \d2      \
+        //    |                  \        \
+        //    To-----------------Ctrl2
+        //
+        // The ABC relation means we can place the new control points however we like
+        // as long as the ratios CA/CP, d1/d12 and d2/d12 remain constant.
+        //
+        // we use the weight to guide our decisions. A weight of 0.5 would be a uniform
+        // displacement (d1 and d2 do not change and both control points are moved by the
+        // same amount).
+        // The approach is to use the weight interpolate the most constrained control point
+        // between it's old position and the position it would have with uniform displacement.
+        // then we determine the position of the least constrained control point such that
+        // the ratios mentioned earlier remain constant.
+
+        let c = self.from.lerp(self.to, self.baseline_projection(t));
+        let cacp_ratio = self.abc_ratio(t);
+
+        let old_pos = self.sample(t);
+        // Construct A before and after drag using the constance ca/cp ratio
+        let old_a = old_pos + (old_pos - c) / cacp_ratio;
+        let new_a = new_position + (new_position - c) / cacp_ratio;
+
+        // Sort ctrl1 and ctrl2 such ctrl1 is the least affected (or most constrained).
+        let mut ctrl1 = self.ctrl1;
+        let mut ctrl2 = self.ctrl2;
+        if t < S::HALF {
+            std::mem::swap(&mut ctrl1, &mut ctrl2);
+        }
+
+        // Move the most constrained control point by a subset of the uniform displacement
+        // depending on the weight.
+        let uniform_displacement = new_a - old_a;
+        let f = if t < S::HALF { S::TWO * weight } else { S::TWO * (S::ONE - weight) };
+        let mut new_ctrl1 = ctrl1 + uniform_displacement * f;
+
+        // Now that the most constrained control point is placed there is only one position
+        // for the least constrained control point that satisfies the constant ratios.
+        let d1_pre = (old_a - ctrl1).length();
+        let d12_pre = (self.ctrl2 - self.ctrl1).length();
+
+        let mut new_ctrl2 = new_ctrl1 + (new_a - new_ctrl1) * (d12_pre / d1_pre);
+
+        if t < S::HALF {
+            std::mem::swap(&mut new_ctrl1, &mut new_ctrl2);
+        }
+
+        CubicBezierSegment {
+            from: self.from,
+            ctrl1: new_ctrl1,
+            ctrl2: new_ctrl2,
+            to: self.to,
+        }
+    }
 }
 
 impl<S: Scalar> Segment for CubicBezierSegment<S> {
     impl_segment!(S);
+
+    fn for_each_flattened_with_t(&self, tolerance: Self::Scalar, callback: &mut dyn FnMut(&LineSegment<S>, Range<S>)) {
+        self.for_each_flattened_with_t(tolerance, &mut|s, t| callback(s, t));
+    }
 }
 
 impl<S: Scalar> BoundingBox for CubicBezierSegment<S> {
@@ -937,8 +1283,288 @@ impl<S: Scalar> BoundingBox for CubicBezierSegment<S> {
     }
 }
 
-/// A monotonically increasing in x and y quadratic bézier curve segment
-pub type MonotonicCubicBezierSegment<S> = Monotonic<CubicBezierSegment<S>>;
+use crate::quadratic_bezier::FlattenedT as FlattenedQuadraticSegment;
+
+pub struct Flattened<S: Scalar> {
+    curve: CubicBezierSegment<S>,
+    current_curve: FlattenedQuadraticSegment<S>,
+    remaining_sub_curves: i32,
+    tolerance: S,
+    range_step: S,
+    range_start: S,
+}
+
+impl<S: Scalar> Flattened<S> {
+    pub(crate) fn new(curve: &CubicBezierSegment<S>, tolerance: S) -> Self {
+        debug_assert!(tolerance >= S::EPSILON * S::EPSILON);
+
+        let quadratics_tolerance = tolerance * S::value(0.4);
+        let flattening_tolerance = tolerance * S::value(0.8);
+
+        let num_quadratics = curve.num_quadratics_impl(quadratics_tolerance);
+
+        let range_step = S::ONE / num_quadratics;
+
+        let quadratic = curve.split_range(S::ZERO..range_step).to_quadratic();
+        let current_curve = FlattenedQuadraticSegment::new(&quadratic, flattening_tolerance);
+
+        Flattened {
+            curve: *curve,
+            current_curve,
+            remaining_sub_curves: num_quadratics.to_i32().unwrap() - 1,
+            tolerance: flattening_tolerance,
+            range_start: S::ZERO,
+            range_step,
+        }
+    }
+}
+
+impl<S: Scalar> Iterator for Flattened<S> {
+    type Item = Point<S>;
+
+    fn next(&mut self) -> Option<Point<S>> {
+        if let Some(t_inner) = self.current_curve.next() {
+            let t = self.range_start + t_inner * self.range_step;
+            return Some(self.curve.sample(t));
+        }
+
+        if self.remaining_sub_curves <= 0 {
+            return None;
+        }
+
+        self.range_start += self.range_step;
+        let t0 = self.range_start;
+        let t1 = self.range_start + self.range_step;
+        self.remaining_sub_curves -= 1;
+
+        let quadratic = self.curve.split_range(t0..t1).to_quadratic();
+        self.current_curve = FlattenedQuadraticSegment::new(&quadratic, self.tolerance);
+
+        let t_inner = self.current_curve.next().unwrap_or(S::ONE);
+        let t = t0 + t_inner * self.range_step;
+
+        Some(self.curve.sample(t))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (
+            self.remaining_sub_curves as usize * self.current_curve.size_hint().0,
+            None,
+        )
+    }
+}
+
+#[cfg(test)]
+fn print_arrays(a: &[Point<f32>], b: &[Point<f32>]) {
+    println!("left:  {:?}", a);
+    println!("right: {:?}", b);
+}
+
+#[cfg(test)]
+fn assert_approx_eq(a: &[Point<f32>], b: &[Point<f32>]) {
+    if a.len() != b.len() {
+        print_arrays(a, b);
+        panic!("Lengths differ ({} != {})", a.len(), b.len());
+    }
+    for i in 0..a.len() {
+        let threshold = 0.029;
+        let dx = f32::abs(a[i].x - b[i].x);
+        let dy = f32::abs(a[i].y - b[i].y);
+        if dx > threshold || dy > threshold {
+            print_arrays(a, b);
+            println!("diff = {:?} {:?}", dx, dy);
+            panic!("The arrays are not equal");
+        }
+    }
+}
+
+#[test]
+fn test_iterator_builder_1() {
+    let tolerance = 0.01;
+    let c1 = CubicBezierSegment {
+        from: Point::new(0.0, 0.0),
+        ctrl1: Point::new(1.0, 0.0),
+        ctrl2: Point::new(1.0, 1.0),
+        to: Point::new(0.0, 1.0),
+    };
+    let iter_points: Vec<Point<f32>> = c1.flattened(tolerance).collect();
+    let mut builder_points = Vec::new();
+    c1.for_each_flattened(tolerance, &mut |s| {
+        builder_points.push(s.to);
+    });
+
+    assert!(iter_points.len() > 2);
+    assert_approx_eq(&iter_points[..], &builder_points[..]);
+}
+
+#[test]
+fn test_iterator_builder_2() {
+    let tolerance = 0.01;
+    let c1 = CubicBezierSegment {
+        from: Point::new(0.0, 0.0),
+        ctrl1: Point::new(1.0, 0.0),
+        ctrl2: Point::new(0.0, 1.0),
+        to: Point::new(1.0, 1.0),
+    };
+    let iter_points: Vec<Point<f32>> = c1.flattened(tolerance).collect();
+    let mut builder_points = Vec::new();
+    c1.for_each_flattened(tolerance, &mut |s| {
+        builder_points.push(s.to);
+    });
+
+    assert!(iter_points.len() > 2);
+    assert_approx_eq(&iter_points[..], &builder_points[..]);
+}
+
+#[test]
+fn test_iterator_builder_3() {
+    let tolerance = 0.01;
+    let c1 = CubicBezierSegment {
+        from: Point::new(141.0, 135.0),
+        ctrl1: Point::new(141.0, 130.0),
+        ctrl2: Point::new(140.0, 130.0),
+        to: Point::new(131.0, 130.0),
+    };
+    let iter_points: Vec<Point<f32>> = c1.flattened(tolerance).collect();
+    let mut builder_points = Vec::new();
+    c1.for_each_flattened(tolerance, &mut |s| {
+        builder_points.push(s.to);
+    });
+
+    assert!(iter_points.len() > 2);
+    assert_approx_eq(&iter_points[..], &builder_points[..]);
+}
+
+#[test]
+fn test_issue_19() {
+    let tolerance = 0.15;
+    let c1 = CubicBezierSegment {
+        from: Point::new(11.71726, 9.07143),
+        ctrl1: Point::new(1.889879, 13.22917),
+        ctrl2: Point::new(18.142855, 19.27679),
+        to: Point::new(18.142855, 19.27679),
+    };
+    let iter_points: Vec<Point<f32>> = c1.flattened(tolerance).collect();
+    let mut builder_points = Vec::new();
+    c1.for_each_flattened(tolerance, &mut |s| {
+        builder_points.push(s.to);
+    });
+
+    assert_approx_eq(&iter_points[..], &builder_points[..]);
+
+    assert!(iter_points.len() > 1);
+}
+
+#[test]
+fn test_issue_194() {
+    let segment = CubicBezierSegment {
+        from: Point::new(0.0, 0.0),
+        ctrl1: Point::new(0.0, 0.0),
+        ctrl2: Point::new(50.0, 70.0),
+        to: Point::new(100.0, 100.0),
+    };
+
+    let mut points = Vec::new();
+    segment.for_each_flattened(0.1, &mut |s| {
+        points.push(s.to);
+    });
+
+    assert!(points.len() > 2);
+}
+
+#[test]
+fn flatten_with_t() {
+    let segment = CubicBezierSegment {
+        from: Point::new(0.0f32, 0.0),
+        ctrl1: Point::new(0.0, 0.0),
+        ctrl2: Point::new(50.0, 70.0),
+        to: Point::new(100.0, 100.0),
+    };
+
+    for tolerance in &[0.1, 0.01, 0.001, 0.0001] {
+        let tolerance = *tolerance;
+
+        let mut a = Vec::new();
+        segment.for_each_flattened(tolerance, &mut |s| {
+            a.push(*s);
+        });
+
+        let mut b = Vec::new();
+        let mut ts = Vec::new();
+        segment.for_each_flattened_with_t(tolerance, &mut |s, t| {
+            b.push(*s);
+            ts.push(t);
+        });
+
+        assert_eq!(a, b);
+
+        for i in 0..b.len() {
+            let sampled = segment.sample(ts[i].start);
+            let point = b[i].from;
+            let dist = (sampled - point).length();
+            assert!(dist <= tolerance);
+
+            let sampled = segment.sample(ts[i].end);
+            let point = b[i].to;
+            let dist = (sampled - point).length();
+            assert!(dist <= tolerance);
+        }
+    }
+}
+
+#[test]
+fn test_flatten_end() {
+    let segment = CubicBezierSegment {
+        from: Point::new(0.0, 0.0),
+        ctrl1: Point::new(100.0, 0.0),
+        ctrl2: Point::new(100.0, 100.0),
+        to: Point::new(100.0, 200.0),
+    };
+
+    let mut last = segment.from;
+    segment.for_each_flattened(0.0001, &mut |s| {
+        last = s.to;
+    });
+
+    assert_eq!(last, segment.to);
+}
+
+#[test]
+fn test_flatten_point() {
+    let segment = CubicBezierSegment {
+        from: Point::new(0.0, 0.0),
+        ctrl1: Point::new(0.0, 0.0),
+        ctrl2: Point::new(0.0, 0.0),
+        to: Point::new(0.0, 0.0),
+    };
+
+    let mut last = segment.from;
+    segment.for_each_flattened(0.0001, &mut |s| {
+        last = s.to;
+    });
+
+    assert_eq!(last, segment.to);
+}
+
+#[test]
+fn issue_652() {
+    use crate::point;
+
+    let curve = CubicBezierSegment {
+        from: point(-1061.0, -3327.0),
+        ctrl1: point(-1061.0, -3177.0),
+        ctrl2: point(-1061.0, -3477.0),
+        to: point(-1061.0, -3327.0),
+    };
+
+    for _ in curve.flattened(1.0) {}
+    for _ in curve.flattened(0.1) {}
+    for _ in curve.flattened(0.01) {}
+
+    curve.for_each_flattened(1.0, &mut |_| {});
+    curve.for_each_flattened(0.1, &mut |_| {});
+    curve.for_each_flattened(0.01, &mut |_| {});
+}
 
 #[test]
 fn fast_bounding_box_for_cubic_bezier_segment() {
@@ -949,7 +1575,10 @@ fn fast_bounding_box_for_cubic_bezier_segment() {
         to: Point::new(2.0, 0.0),
     };
 
-    let expected_aabb = Box2D { min: point(0.0, -1.0), max: point(2.0, 1.0) };
+    let expected_aabb = Box2D {
+        min: point(0.0, -1.0),
+        max: point(2.0, 1.0),
+    };
 
     let actual_aabb = a.fast_bounding_box();
 
@@ -965,8 +1594,14 @@ fn minimum_bounding_box_for_cubic_bezier_segment() {
         to: Point::new(2.0, 0.0),
     };
 
-    let expected_bigger_aabb: Box2D<f32> = Box2D { min: point(0.0, -0.6), max: point(2.0, 0.6) };
-    let expected_smaller_aabb: Box2D<f32> = Box2D { min: point(0.1, -0.5), max: point(2.0, 0.5) };
+    let expected_bigger_aabb: Box2D<f32> = Box2D {
+        min: point(0.0, -0.6),
+        max: point(2.0, 0.6),
+    };
+    let expected_smaller_aabb: Box2D<f32> = Box2D {
+        min: point(0.1, -0.5),
+        max: point(2.0, 0.5),
+    };
 
     let actual_minimum_aabb = a.bounding_box();
 
@@ -1083,30 +1718,6 @@ fn derivatives() {
     assert_eq!(c1.dx(0.0), 0.0);
     assert_eq!(c1.dx(1.0), 0.0);
     assert_eq!(c1.dy(0.5), 0.0);
-}
-
-#[test]
-fn monotonic_solve_t_for_x() {
-    let c1 = CubicBezierSegment {
-        from: Point::new(1.0, 1.0),
-        ctrl1: Point::new(1.0, 2.0),
-        ctrl2: Point::new(2.0, 1.0),
-        to: Point::new(2.0, 2.0),
-    };
-
-    let tolerance = 0.0001;
-
-    for i in 0..10u32 {
-        let t = i as f32 / 10.0;
-        let p = c1.sample(t);
-        let t2 = c1
-            .assume_monotonic()
-            .solve_t_for_x(p.x, 0.0..1.0, tolerance);
-        // t should be pretty close to t2 but the only guarantee we have and can test
-        // against is that x(t) - x(t2) is within the specified tolerance threshold.
-        let x_diff = c1.x(t) - c1.x(t2);
-        assert!(f32::abs(x_diff) <= tolerance);
-    }
 }
 
 #[test]
@@ -1334,15 +1945,15 @@ fn test_cubic_intersection_deduping() {
 #[test]
 fn cubic_line_intersection_on_endpoint() {
     let l1 = LineSegment {
-      from: Point::new(0.0, -100.0),
-      to: Point::new(0.0, 100.0),
+        from: Point::new(0.0, -100.0),
+        to: Point::new(0.0, 100.0),
     };
 
     let cubic = CubicBezierSegment {
-      from: Point::new(0.0, 0.0),
-      ctrl1: Point::new(20.0, 20.0),
-      ctrl2: Point::new(20.0, 40.0),
-      to: Point::new(0.0, 60.0),
+        from: Point::new(0.0, 0.0),
+        ctrl1: Point::new(20.0, 20.0),
+        ctrl2: Point::new(20.0, 40.0),
+        to: Point::new(0.0, 60.0),
     };
 
     let intersections = cubic.line_segment_intersections_t(&l1);
@@ -1352,8 +1963,8 @@ fn cubic_line_intersection_on_endpoint() {
     assert_eq!(intersections[1], (0.0, 0.5));
 
     let l2 = LineSegment {
-      from: Point::new(0.0, 0.0),
-      to: Point::new(0.0, 60.0),
+        from: Point::new(0.0, 0.0),
+        to: Point::new(0.0, 60.0),
     };
 
     let intersections = cubic.line_segment_intersections_t(&l2);
@@ -1377,4 +1988,44 @@ fn cubic_line_intersection_on_endpoint() {
     let intersections = c1.cubic_intersections_t(&c2);
 
     assert!(intersections.is_empty());
+}
+
+
+#[test]
+fn test_cubic_to_quadratics() {
+    use euclid::approxeq::ApproxEq;
+
+    let quadratic = QuadraticBezierSegment {
+        from: point(1.0, 2.0),
+        ctrl: point(10.0, 5.0),
+        to: point(0.0, 1.0),
+    };
+
+    let mut count = 0;
+    assert_eq!(quadratic.to_cubic().num_quadratics(0.0001), 1);
+    quadratic.to_cubic().for_each_quadratic_bezier(0.0001, &mut |c| {
+        assert!(count == 0);
+        assert!(c.from.approx_eq(&quadratic.from));
+        assert!(c.ctrl.approx_eq(&quadratic.ctrl));
+        assert!(c.to.approx_eq(&quadratic.to));
+        count += 1;
+    });
+
+    let cubic = CubicBezierSegment {
+        from: point(1.0f32, 1.0),
+        ctrl1: point(10.0, 2.0),
+        ctrl2: point(1.0, 3.0),
+        to: point(10.0, 4.0),
+    };
+
+    let mut prev = cubic.from;
+    let mut count = 0;
+    cubic.for_each_quadratic_bezier(0.01, &mut |c| {
+        assert!(c.from.approx_eq(&prev));
+        prev = c.to;
+        count += 1;
+    });
+    assert!(prev.approx_eq(&cubic.to));
+    assert!(count < 10);
+    assert!(count > 4);
 }

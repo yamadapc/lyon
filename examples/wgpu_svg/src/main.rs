@@ -4,10 +4,11 @@ use lyon::path::PathEvent;
 use lyon::tessellation::geometry_builder::*;
 use lyon::tessellation::{self, FillOptions, FillTessellator, StrokeOptions, StrokeTessellator};
 use usvg::prelude::*;
+use wgpu::include_wgsl;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::Window;
+use winit::window::{Window, WindowBuilder};
 
 use futures::executor::block_on;
 
@@ -68,11 +69,7 @@ fn main() {
         )
         .get_matches();
 
-    let msaa_samples = if app.is_present("MSAA") {
-        4
-    } else {
-        1
-    };
+    let msaa_samples = if app.is_present("MSAA") { 4 } else { 1 };
 
     // Parse and tessellate the geometry
 
@@ -195,7 +192,8 @@ fn main() {
     };
 
     let event_loop = EventLoop::new();
-    let window = Window::new(&event_loop).unwrap();
+    let window_builder = WindowBuilder::new().with_inner_size(scene.window_size);
+    let window = window_builder.build(&event_loop).unwrap();
 
     let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
 
@@ -245,21 +243,26 @@ fn main() {
         usage: wgpu::BufferUsages::INDEX,
     });
 
-    let prim_buffer_byte_size = (MAX_PRIMITIVES * std::mem::size_of::<GpuPrimitive>()) as u64;
-    let transform_buffer_byte_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuTransform>()) as u64;
+    let prim_buffer_byte_size = (primitives.len() * std::mem::size_of::<GpuPrimitive>()) as u64;
+    let transform_buffer_byte_size =
+        (transforms.len() * std::mem::size_of::<GpuTransform>()) as u64;
     let globals_buffer_byte_size = std::mem::size_of::<GpuGlobals>() as u64;
 
-    let prims_ubo = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Prims ubo"),
+    let prims_ssbo = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Prims ssbo"),
         size: prim_buffer_byte_size,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::VERTEX
+            | wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
-    let transforms_ubo = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Transforms ubo"),
+    let transforms_ssbo = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Transforms ssbo"),
         size: transform_buffer_byte_size,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::VERTEX
+            | wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
 
@@ -269,14 +272,8 @@ fn main() {
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let vs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
-        label: Some("Geometry vs"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/geometry.vs.wgsl").into()),
-    });
-    let fs_module = &device.create_shader_module(&wgpu::ShaderModuleDescriptor {
-        label: Some("Geometry fs"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/geometry.fs.wgsl").into()),
-    });
+    let vs_module = device.create_shader_module(&include_wgsl!("../shaders/geometry.vs.wgsl"));
+    let fs_module = device.create_shader_module(&include_wgsl!("../shaders/geometry.fs.wgsl"));
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Bind group layout"),
         entries: &[
@@ -294,7 +291,7 @@ fn main() {
                 binding: 1,
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(prim_buffer_byte_size),
                 },
@@ -304,7 +301,7 @@ fn main() {
                 binding: 2,
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
                     min_binding_size: wgpu::BufferSize::new(transform_buffer_byte_size),
                 },
@@ -323,11 +320,11 @@ fn main() {
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: wgpu::BindingResource::Buffer(prims_ubo.as_entire_buffer_binding()),
+                resource: wgpu::BindingResource::Buffer(prims_ssbo.as_entire_buffer_binding()),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Buffer(transforms_ubo.as_entire_buffer_binding()),
+                resource: wgpu::BindingResource::Buffer(transforms_ssbo.as_entire_buffer_binding()),
             },
         ],
     });
@@ -364,13 +361,11 @@ fn main() {
         fragment: Some(wgpu::FragmentState {
             module: &fs_module,
             entry_point: "main",
-            targets: &[
-                wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-            ],
+            targets: &[wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }],
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -378,7 +373,7 @@ fn main() {
             front_face: wgpu::FrontFace::Ccw,
             strip_index_format: None,
             cull_mode: None,
-            clamp_depth: false,
+            unclipped_depth: false,
             conservative: false,
         },
         depth_stencil: None,
@@ -387,6 +382,7 @@ fn main() {
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
+        multiview: None,
     };
 
     let render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
@@ -396,9 +392,9 @@ fn main() {
     render_pipeline_descriptor.primitive.topology = wgpu::PrimitiveTopology::LineList;
     let wireframe_render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
 
-    queue.write_buffer(&transforms_ubo, 0, bytemuck::cast_slice(&transforms));
+    queue.write_buffer(&transforms_ssbo, 0, bytemuck::cast_slice(&transforms));
 
-    queue.write_buffer(&prims_ubo, 0, bytemuck::cast_slice(&primitives));
+    queue.write_buffer(&prims_ssbo, 0, bytemuck::cast_slice(&primitives));
 
     window.request_redraw();
 
@@ -449,7 +445,9 @@ fn main() {
             }
         };
 
-        let frame_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let frame_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Encoder"),
@@ -567,10 +565,6 @@ impl StrokeVertexConstructor<GpuVertex> for VertexCtor {
         }
     }
 }
-
-// These mush match the uniform buffer sizes in the vertex shader.
-pub static MAX_PRIMITIVES: usize = 512;
-pub static MAX_TRANSFORMS: usize = 512;
 
 // Default scene has all values set to zero
 #[derive(Copy, Clone, Debug)]

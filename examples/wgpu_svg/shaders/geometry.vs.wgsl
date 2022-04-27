@@ -1,4 +1,3 @@
-[[block]]
 struct Globals {
     u_zoom: vec2<f32>;
     u_pan: vec2<f32>;
@@ -16,19 +15,17 @@ struct Transform {
     data1: vec4<f32>;
 };
 
-[[block]]
 struct Primitives {
-    primitives: [[stride(16)]] array<Primitive, 512>;
+    primitives: [[stride(16)]] array<Primitive>;
 };
 
-[[block]]
 struct Transforms {
-    transforms: [[stride(32)]] array<Transform, 512>;
+    transforms: [[stride(32)]] array<Transform>;
 };
 
 [[group(0), binding(0)]] var<uniform> global: Globals;
-[[group(0), binding(1)]] var<uniform> u_primitives: Primitives;
-[[group(0), binding(2)]] var<uniform> u_transforms: Transforms;
+[[group(0), binding(1)]] var<storage, read> u_primitives: Primitives;
+[[group(0), binding(2)]] var<storage, read> u_transforms: Transforms;
 
 struct VertexOutput {
     [[location(0)]] v_color: vec4<f32>;

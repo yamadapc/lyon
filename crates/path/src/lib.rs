@@ -441,19 +441,29 @@ impl<'l> AttributeStore for AttributeSlice<'l> {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serialization", derive(Serialize, Deserialize))]
 pub struct AttributeIndex(pub u8);
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct Attributes<'l>(pub &'l[f32]);
+pub struct Attributes<'l>(pub &'l [f32]);
 
 impl<'l> Attributes<'l> {
     pub const NONE: Attributes<'static> = Attributes(&[]);
 
     #[inline]
-    pub fn len(&self) -> usize { self.0.len() }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 
     #[inline]
-    pub fn as_slice(&self) -> &[f32] { self.0 }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[f32] {
+        self.0
+    }
 }
 
 impl<'l> Default for Attributes<'l> {
@@ -478,10 +488,14 @@ impl<'l> std::ops::Index<usize> for Attributes<'l> {
     }
 }
 
-impl<'l> From<&'l[f32]> for Attributes<'l> {
-    fn from(slice: &'l[f32]) -> Attributes<'l> { Attributes(slice) }
+impl<'l> From<&'l [f32]> for Attributes<'l> {
+    fn from(slice: &'l [f32]) -> Attributes<'l> {
+        Attributes(slice)
+    }
 }
 
-impl<'l> Into<&'l[f32]> for Attributes<'l> {
-    fn into(self) -> &'l[f32] { self.0 }
+impl<'l> From<Attributes<'l>> for &'l [f32] {
+    fn from(attr: Attributes<'l>) -> &'l [f32] {
+        attr.0
+    }
 }

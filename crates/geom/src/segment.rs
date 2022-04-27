@@ -1,6 +1,5 @@
 use crate::scalar::Scalar;
-use crate::{CubicBezierSegment, LineSegment, QuadraticBezierSegment};
-use crate::{Point, Vector, Box2D, point};
+use crate::{point, Box2D, Point, Vector, LineSegment};
 
 use std::ops::Range;
 
@@ -59,9 +58,20 @@ pub trait Segment: Copy + Sized {
 
     /// Compute the length of the segment using a flattened approximation.
     fn approximate_length(&self, tolerance: Self::Scalar) -> Self::Scalar;
+
+    /// Approximates the curve with sequence of line segments.
+    ///
+    /// The `tolerance` parameter defines the maximum distance between the curve and
+    /// its approximation.
+    ///
+    /// The parameter `t` at the final segment is guaranteed to be equal to `1.0`.
+    fn for_each_flattened_with_t(
+        &self,
+        tolerance: Self::Scalar,
+        callback: &mut dyn FnMut(&LineSegment<Self::Scalar>, Range<Self::Scalar>)
+    );
 }
 
-// TODO: replace with BoundingBox trait.
 pub trait BoundingBox {
     type Scalar: Scalar;
 
@@ -148,95 +158,4 @@ macro_rules! impl_segment {
             self.approximate_length(tolerance)
         }
     };
-}
-
-/// Either a cubic, quadratic or linear bézier segment.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum BezierSegment<S> {
-    Linear(LineSegment<S>),
-    Quadratic(QuadraticBezierSegment<S>),
-    Cubic(CubicBezierSegment<S>),
-}
-
-impl<S: Scalar> BezierSegment<S> {
-    #[inline]
-    pub fn sample(&self, t: S) -> Point<S> {
-        match self {
-            BezierSegment::Linear(segment) => segment.sample(t),
-            BezierSegment::Quadratic(segment) => segment.sample(t),
-            BezierSegment::Cubic(segment) => segment.sample(t),
-        }
-    }
-
-    #[inline]
-    pub fn from(&self) -> Point<S> {
-        match self {
-            BezierSegment::Linear(segment) => segment.from,
-            BezierSegment::Quadratic(segment) => segment.from,
-            BezierSegment::Cubic(segment) => segment.from,
-        }
-    }
-
-    #[inline]
-    pub fn to(&self) -> Point<S> {
-        match self {
-            BezierSegment::Linear(segment) => segment.to,
-            BezierSegment::Quadratic(segment) => segment.to,
-            BezierSegment::Cubic(segment) => segment.to,
-        }
-    }
-
-    #[inline]
-    pub fn is_linear(&self, tolerance: S) -> bool {
-        match self {
-            BezierSegment::Linear(..) => true,
-            BezierSegment::Quadratic(segment) => segment.is_linear(tolerance),
-            BezierSegment::Cubic(segment) => segment.is_linear(tolerance),
-        }
-    }
-
-    #[inline]
-    pub fn baseline(&self) -> LineSegment<S> {
-        match self {
-            BezierSegment::Linear(segment) => *segment,
-            BezierSegment::Quadratic(segment) => segment.baseline(),
-            BezierSegment::Cubic(segment) => segment.baseline(),
-        }
-    }
-
-    /// Split this segment into two sub-segments.
-    pub fn split(&self, t: S) -> (BezierSegment<S>, BezierSegment<S>) {
-        match self {
-            BezierSegment::Linear(segment) => {
-                let (a, b) = segment.split(t);
-                (BezierSegment::Linear(a), BezierSegment::Linear(b))
-            }
-            BezierSegment::Quadratic(segment) => {
-                let (a, b) = segment.split(t);
-                (BezierSegment::Quadratic(a), BezierSegment::Quadratic(b))
-            }
-            BezierSegment::Cubic(segment) => {
-                let (a, b) = segment.split(t);
-                (BezierSegment::Cubic(a), BezierSegment::Cubic(b))
-            }
-        }
-    }
-}
-
-impl<S> From<LineSegment<S>> for BezierSegment<S> {
-    fn from(s: LineSegment<S>) -> Self {
-        BezierSegment::Linear(s)
-    }
-}
-
-impl<S> From<QuadraticBezierSegment<S>> for BezierSegment<S> {
-    fn from(s: QuadraticBezierSegment<S>) -> Self {
-        BezierSegment::Quadratic(s)
-    }
-}
-
-impl<S> From<CubicBezierSegment<S>> for BezierSegment<S> {
-    fn from(s: CubicBezierSegment<S>) -> Self {
-        BezierSegment::Cubic(s)
-    }
 }

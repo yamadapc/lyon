@@ -5,14 +5,13 @@ use crate::monotone::*;
 use crate::path::polygon::Polygon;
 use crate::path::traits::{Build, PathBuilder};
 use crate::path::{
-    AttributeStore, EndpointId, FillRule, IdEvent, PathEvent, PathSlice, PositionStore,
-    Winding, Attributes,
-    builder::NoAttributes,
+    builder::NoAttributes, AttributeStore, Attributes, EndpointId, FillRule, IdEvent, PathEvent,
+    PathSlice, PositionStore, Winding,
 };
 use crate::{FillGeometryBuilder, Orientation, VertexId};
 use crate::{
-    FillOptions, InternalError, TessellationError, TessellationResult, VertexSource,
-    SimpleAttributeStore,
+    FillOptions, InternalError, SimpleAttributeStore, TessellationError, TessellationResult,
+    UnsupportedParamater, VertexSource,
 };
 use float_next_after::NextAfter;
 use std::cmp::Ordering;
@@ -26,7 +25,7 @@ use std::env;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Side {
     Left,
-    Right
+    Right,
 }
 
 impl Side {
@@ -680,7 +679,7 @@ impl FillTessellator {
         options: &FillOptions,
         output: &mut dyn FillGeometryBuilder,
     ) -> TessellationResult {
-        let options = options.clone().with_intersections(false);
+        let options = (*options).with_intersections(false);
 
         let mut builder = self.builder(&options, output);
         builder.add_ellipse(center, radii, x_rotation, winding);
@@ -752,7 +751,9 @@ impl FillTessellator {
         builder: &mut dyn FillGeometryBuilder,
     ) -> TessellationResult {
         if options.tolerance.is_nan() || options.tolerance <= 0.0 {
-            return Err(TessellationError::UnsupportedParamater);
+            return Err(TessellationError::UnsupportedParamater(
+                UnsupportedParamater::ToleranceIsNaN,
+            ));
         }
 
         self.reset();
@@ -777,7 +778,7 @@ impl FillTessellator {
         mem::swap(&mut self.scan, &mut scan);
 
         if let Err(e) = result {
-            tess_log!(self, "Tessellation failed with error: {:?}.", e);
+            tess_log!(self, "Tessellation failed with error: {}.", e);
             builder.abort_geometry();
 
             return Err(e);
@@ -799,7 +800,9 @@ impl FillTessellator {
 
         self.fill.spans.clear();
 
-        Ok(builder.end_geometry())
+        builder.end_geometry();
+
+        Ok(())
     }
 
     /// Enable/disable some verbose logging during the tessellation, for
@@ -864,7 +867,9 @@ impl FillTessellator {
         self.current_position = self.events.position(current_event);
 
         if self.current_position.x.is_nan() || self.current_position.y.is_nan() {
-            return Err(TessellationError::UnsupportedParamater);
+            return Err(TessellationError::UnsupportedParamater(
+                UnsupportedParamater::PositionIsNaN,
+            ));
         }
 
         let position = match self.orientation {
@@ -2089,7 +2094,6 @@ impl FillTessellator {
 }
 
 pub(crate) fn points_are_equal(a: Point, b: Point) -> bool {
-    // TODO: Use the tolerance threshold?
     a == b
 }
 
@@ -2211,7 +2215,8 @@ impl<'l> FillVertex<'l> {
                 let a = store.get(id);
                 assert!(a.len() == num_attributes);
                 assert!(self.attrib_buffer.len() == num_attributes);
-                self.attrib_buffer[..num_attributes].clone_from_slice(&a.as_slice()[..num_attributes]);
+                self.attrib_buffer[..num_attributes]
+                    .clone_from_slice(&a.as_slice()[..num_attributes]);
             }
             VertexSource::Edge { from, to, t } => {
                 let a = store.get(from);
@@ -2339,10 +2344,8 @@ impl<'l> FillBuilder<'l> {
         options: &'l FillOptions,
         output: &'l mut dyn FillGeometryBuilder,
     ) -> Self {
-        let events = std::mem::replace(
-            &mut tessellator.events,
-            EventQueue::new(),
-        ).into_builder(options.tolerance);
+        let events = std::mem::replace(&mut tessellator.events, EventQueue::new())
+            .into_builder(options.tolerance);
 
         FillBuilder {
             events,
@@ -2366,7 +2369,9 @@ impl<'l> FillBuilder<'l> {
         }
     }
 
-    pub fn num_attributes(&self) -> usize { self.attrib_store.num_attributes() }
+    pub fn num_attributes(&self) -> usize {
+        self.attrib_store.num_attributes()
+    }
 
     pub fn begin(&mut self, at: Point, attributes: Attributes) -> EndpointId {
         let at = self.position(at);
@@ -2390,7 +2395,12 @@ impl<'l> FillBuilder<'l> {
         id
     }
 
-    pub fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, attributes: Attributes) -> EndpointId {
+    pub fn quadratic_bezier_to(
+        &mut self,
+        ctrl: Point,
+        to: Point,
+        attributes: Attributes,
+    ) -> EndpointId {
         let ctrl = self.position(ctrl);
         let to = self.position(to);
         let id = self.attrib_store.add(attributes);
@@ -2399,7 +2409,13 @@ impl<'l> FillBuilder<'l> {
         id
     }
 
-    pub fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, attributes: Attributes) -> EndpointId {
+    pub fn cubic_bezier_to(
+        &mut self,
+        ctrl1: Point,
+        ctrl2: Point,
+        to: Point,
+        attributes: Attributes,
+    ) -> EndpointId {
         let ctrl1 = self.position(ctrl1);
         let ctrl2 = self.position(ctrl2);
         let to = self.position(to);
@@ -2414,7 +2430,13 @@ impl<'l> FillBuilder<'l> {
         self.events.reserve(endpoints + ctrl_points * 2);
     }
 
-    pub fn add_circle(&mut self, center: Point, radius: f32, winding: Winding, attributes: Attributes) {
+    pub fn add_circle(
+        &mut self,
+        center: Point,
+        radius: f32,
+        winding: Winding,
+        attributes: Attributes,
+    ) {
         // This specialized routine extracts the curves into separate sub-paths
         // to nudge the tessellator towards putting them in their own monotonic
         // spans. This avoids generating thin triangles from one side of the circle
@@ -2505,7 +2527,9 @@ impl<'l> FillBuilder<'l> {
 }
 
 impl<'l> PathBuilder for FillBuilder<'l> {
-    fn num_attributes(&self) -> usize { self.attrib_store.num_attributes() }
+    fn num_attributes(&self) -> usize {
+        self.attrib_store.num_attributes()
+    }
 
     fn begin(&mut self, at: Point, attributes: Attributes) -> EndpointId {
         self.begin(at, attributes)
@@ -2519,11 +2543,22 @@ impl<'l> PathBuilder for FillBuilder<'l> {
         self.line_to(to, attributes)
     }
 
-    fn quadratic_bezier_to(&mut self, ctrl: Point, to: Point, attributes: Attributes) -> EndpointId {
+    fn quadratic_bezier_to(
+        &mut self,
+        ctrl: Point,
+        to: Point,
+        attributes: Attributes,
+    ) -> EndpointId {
         self.quadratic_bezier_to(ctrl, to, attributes)
     }
 
-    fn cubic_bezier_to(&mut self, ctrl1: Point, ctrl2: Point, to: Point, attributes: Attributes) -> EndpointId {
+    fn cubic_bezier_to(
+        &mut self,
+        ctrl1: Point,
+        ctrl2: Point,
+        to: Point,
+        attributes: Attributes,
+    ) -> EndpointId {
         self.cubic_bezier_to(ctrl1, ctrl2, to, attributes)
     }
 
@@ -2653,13 +2688,6 @@ fn fill_vertex_source_01() {
     }
 
     impl GeometryBuilder for CheckVertexSources {
-        fn begin_geometry(&mut self) {}
-        fn end_geometry(&mut self) -> Count {
-            Count {
-                vertices: self.next_vertex,
-                indices: 0,
-            }
-        }
         fn abort_geometry(&mut self) {}
         fn add_triangle(&mut self, _: VertexId, _: VertexId, _: VertexId) {}
     }
@@ -2683,11 +2711,20 @@ fn fill_vertex_source_01() {
             }
 
             if eq(pos, point(0.0, 0.0)) {
-                assert_eq!(vertex.interpolated_attributes(), Attributes(&[1.0, 0.0, 0.0]))
+                assert_eq!(
+                    vertex.interpolated_attributes(),
+                    Attributes(&[1.0, 0.0, 0.0])
+                )
             } else if eq(pos, point(1.0, 1.0)) {
-                assert_eq!(vertex.interpolated_attributes(), Attributes(&[0.0, 1.0, 0.0]))
+                assert_eq!(
+                    vertex.interpolated_attributes(),
+                    Attributes(&[0.0, 1.0, 0.0])
+                )
             } else if eq(pos, point(0.0, 2.0)) {
-                assert_eq!(vertex.interpolated_attributes(), Attributes(&[0.0, 0.0, 1.0]))
+                assert_eq!(
+                    vertex.interpolated_attributes(),
+                    Attributes(&[0.0, 0.0, 1.0])
+                )
             }
 
             let id = self.next_vertex;
@@ -2755,14 +2792,6 @@ fn fill_vertex_source_02() {
     }
 
     impl GeometryBuilder for CheckVertexSources {
-        fn begin_geometry(&mut self) {}
-        fn end_geometry(&mut self) -> Count {
-            Count {
-                vertices: self.next_vertex,
-                indices: 0,
-            }
-        }
-        fn abort_geometry(&mut self) {}
         fn add_triangle(&mut self, _: VertexId, _: VertexId, _: VertexId) {}
     }
 
@@ -2914,14 +2943,6 @@ fn fill_vertex_source_03() {
     }
 
     impl GeometryBuilder for CheckVertexSources {
-        fn begin_geometry(&mut self) {}
-        fn end_geometry(&mut self) -> Count {
-            Count {
-                vertices: self.next_vertex,
-                indices: 0,
-            }
-        }
-        fn abort_geometry(&mut self) {}
         fn add_triangle(&mut self, _: VertexId, _: VertexId, _: VertexId) {}
     }
 
@@ -2966,14 +2987,6 @@ fn fill_builder_vertex_source() {
     }
 
     impl GeometryBuilder for CheckVertexSources {
-        fn begin_geometry(&mut self) {}
-        fn end_geometry(&mut self) -> Count {
-            Count {
-                vertices: self.next_vertex,
-                indices: 0,
-            }
-        }
-        fn abort_geometry(&mut self) {}
         fn add_triangle(&mut self, _: VertexId, _: VertexId, _: VertexId) {}
     }
 

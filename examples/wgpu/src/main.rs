@@ -1,6 +1,5 @@
 use lyon::extra::rust_logo::build_logo_path;
 use lyon::math::*;
-use lyon::path::iterator::PathIterator;
 use lyon::path::Path;
 use lyon::tessellation;
 use lyon::tessellation::geometry_builder::*;
@@ -12,7 +11,7 @@ use lyon::algorithms::walk;
 use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::Window;
+use winit::window::{Window, WindowBuilder};
 
 // For create_buffer_init()
 use wgpu::util::DeviceExt;
@@ -188,7 +187,10 @@ fn main() {
 
     fill_tess
         .tessellate_rectangle(
-            &Box2D { min: point(-1.0, -1.0), max: point(1.0, 1.0) },
+            &Box2D {
+                min: point(-1.0, -1.0),
+                max: point(1.0, 1.0),
+            },
             &FillOptions::DEFAULT,
             &mut BuffersBuilder::new(&mut bg_geometry, Custom),
         )
@@ -250,7 +252,8 @@ fn main() {
     };
 
     let event_loop = EventLoop::new();
-    let window = Window::new(&event_loop).unwrap();
+    let window_builder = WindowBuilder::new().with_inner_size(scene.window_size);
+    let window = window_builder.build(&event_loop).unwrap();
 
     // create an instance
     let instance = wgpu::Instance::new(wgpu::Backends::all());
@@ -424,13 +427,11 @@ fn main() {
         fragment: Some(wgpu::FragmentState {
             module: &fs_module,
             entry_point: "main",
-            targets: &[
-                wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-            ],
+            targets: &[wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }],
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -438,8 +439,8 @@ fn main() {
             front_face: wgpu::FrontFace::Ccw,
             strip_index_format: None,
             cull_mode: Some(wgpu::Face::Back),
-            clamp_depth: false,
             conservative: false,
+            unclipped_depth: false,
         },
         depth_stencil: depth_stencil_state.clone(),
         multisample: wgpu::MultisampleState {
@@ -447,6 +448,7 @@ fn main() {
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
+        multiview: None,
     };
 
     let render_pipeline = device.create_render_pipeline(&render_pipeline_descriptor);
@@ -474,13 +476,11 @@ fn main() {
         fragment: Some(wgpu::FragmentState {
             module: &bg_fs_module,
             entry_point: "main",
-            targets: &[
-                wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-            ],
+            targets: &[wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }],
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -488,7 +488,7 @@ fn main() {
             front_face: wgpu::FrontFace::Ccw,
             strip_index_format: None,
             cull_mode: None,
-            clamp_depth: false,
+            unclipped_depth: false,
             conservative: false,
         },
         depth_stencil: depth_stencil_state.clone(),
@@ -497,6 +497,7 @@ fn main() {
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
+        multiview: None,
     });
 
     let size = window.inner_size();
@@ -577,7 +578,9 @@ fn main() {
             }
         };
 
-        let frame_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let frame_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Encoder"),
@@ -601,8 +604,9 @@ fn main() {
         let mut arrow_count = 0;
         let offset = (time_secs * 10.0).rem(5.0);
         walk::walk_along_path(
-            path.iter().flattened(0.01),
+            path.iter(),
             offset,
+            0.1,
             &mut walk::RepeatedPattern {
                 callback: |event: walk::WalkerEvent| {
                     if arrow_count + num_instances as usize + 1 >= PRIM_BUFFER_LEN {

@@ -2,6 +2,7 @@
 #![deny(bare_trait_objects)]
 #![deny(unconditional_recursion)]
 #![allow(clippy::float_cmp)]
+#![allow(clippy::too_many_arguments)]
 // TODO: Tessellation pipeline diagram needs to be updated.
 
 //! Tessellation of 2D fill and stroke operations.
@@ -189,13 +190,13 @@ use lyon_extra as extra;
 #[macro_use]
 pub extern crate serde;
 
+mod basic_shapes;
 mod event_queue;
 mod fill;
 pub mod geometry_builder;
 mod math_utils;
 mod monotone;
 mod stroke;
-mod basic_shapes;
 
 #[cfg(test)]
 #[rustfmt::skip]
@@ -220,11 +221,11 @@ pub use crate::stroke::*;
 
 #[doc(inline)]
 pub use crate::geometry_builder::{
-    BuffersBuilder, Count, FillGeometryBuilder, FillVertexConstructor, GeometryBuilder,
+    BuffersBuilder, FillGeometryBuilder, FillVertexConstructor, GeometryBuilder,
     GeometryBuilderError, StrokeGeometryBuilder, StrokeVertexConstructor, VertexBuffers,
 };
 
-pub use crate::path::{FillRule, LineJoin, LineCap, Side, Attributes, AttributeIndex};
+pub use crate::path::{AttributeIndex, Attributes, FillRule, LineCap, LineJoin, Side};
 
 use crate::path::EndpointId;
 
@@ -232,7 +233,7 @@ use std::ops::{Add, Sub};
 use std::u32;
 
 /// The fill tessellator's result type.
-pub type TessellationResult = Result<Count, TessellationError>;
+pub type TessellationResult = Result<(), TessellationError>;
 
 /// Describes an unexpected error happening during tessellation.
 ///
@@ -251,18 +252,20 @@ pub enum InternalError {
 /// The fill tessellator's error enumeration.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TessellationError {
-    UnsupportedParamater,
-    InvalidVertex,
-    TooManyVertices,
+    UnsupportedParamater(UnsupportedParamater),
+    GeometryBuilder(GeometryBuilderError),
     Internal(InternalError),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum UnsupportedParamater {
+    PositionIsNaN,
+    ToleranceIsNaN,
 }
 
 impl From<GeometryBuilderError> for TessellationError {
     fn from(e: GeometryBuilderError) -> Self {
-        match e {
-            GeometryBuilderError::InvalidVertex => TessellationError::InvalidVertex,
-            GeometryBuilderError::TooManyVertices => TessellationError::TooManyVertices,
-        }
+        TessellationError::GeometryBuilder(e)
     }
 }
 impl From<InternalError> for TessellationError {
@@ -270,6 +273,63 @@ impl From<InternalError> for TessellationError {
         TessellationError::Internal(e)
     }
 }
+
+impl std::fmt::Display for TessellationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TessellationError::UnsupportedParamater(e) => {
+                write!(f, "Unsupported parameter: {}", e)
+            }
+            TessellationError::GeometryBuilder(e) => {
+                write!(f, "Geometry builder error: {}", e)
+            }
+            TessellationError::Internal(e) => {
+                write!(f, "Internal error: {}", e)
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for UnsupportedParamater {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnsupportedParamater::PositionIsNaN => {
+                write!(f, "Position is not a number")
+            }
+            UnsupportedParamater::ToleranceIsNaN => {
+                write!(f, "Tolerance threshold is not a number")
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for InternalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InternalError::IncorrectActiveEdgeOrder(i) => {
+                write!(f, "Incorrect active edge order ({})", i)
+            }
+            InternalError::InsufficientNumberOfSpans => {
+                write!(f, "Insufficient number of spans")
+            }
+            InternalError::InsufficientNumberOfEdges => {
+                write!(f, "Insufficient number of edges")
+            }
+            InternalError::MergeVertexOutside => {
+                write!(f, "Merge vertex is outside of the shape")
+            }
+            InternalError::InvalidNumberOfEdgesBelowVertex => {
+                write!(f, "Unexpected number of edges below a vertex")
+            }
+            InternalError::ErrorCode(code) => {
+                write!(f, "Error code #{}", code)
+            }
+        }
+    }
+}
+
+impl std::error::Error for TessellationError {}
+impl std::error::Error for InternalError {}
 
 /// Before or After. Used to describe position relative to a join.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -319,17 +379,11 @@ pub enum VertexSource {
 
 impl VertexSource {
     pub fn is_endpoint(&self) -> bool {
-        match self {
-            VertexSource::Endpoint { .. } => true,
-            _ => false,
-        }
+        matches!(self, VertexSource::Endpoint { .. })
     }
 
     pub fn is_edge(&self) -> bool {
-        match self {
-            VertexSource::Edge { .. } => true,
-            _ => false,
-        }
+        matches!(self, VertexSource::Edge { .. })
     }
 }
 
@@ -661,7 +715,9 @@ impl path::AttributeStore for SimpleAttributeStore {
         Attributes(&self.data[start..end])
     }
 
-    fn num_attributes(&self) -> usize { self.num_attributes }
+    fn num_attributes(&self) -> usize {
+        self.num_attributes
+    }
 }
 
 impl Default for SimpleAttributeStore {
@@ -697,7 +753,6 @@ impl SimpleAttributeStore {
         self.num_attributes = num_attributes;
     }
 }
-
 
 #[test]
 fn test_without_miter_limit() {
